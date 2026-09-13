@@ -79,8 +79,8 @@ class AgentExecutor(private val context: Context?) {
                 }
 
                 is com.ace.app.brain.AgentDecision.Complete -> {
-                    Log.i("ACE_REASON", "ACE_REASON: Brain emitted COMPLETE evidence=\"${decision.evidence}\"")
-                    taskContext.capturedEvidence["completion_evidence"] = decision.evidence
+                    Log.i("ACE_REASON", "ACE_REASON: Brain proposed COMPLETE hypothesis=\"${decision.evidence}\"")
+                    taskContext.capturedEvidence["brain_completion_hypothesis"] = decision.evidence
                     break
                 }
 
