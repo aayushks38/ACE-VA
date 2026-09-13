@@ -3,6 +3,8 @@ package com.ace.app.brain
 import android.content.Context
 import android.util.Log
 import com.ace.app.agent.AgentTaskContext
+import com.ace.app.agent.GoalInterpretation
+import com.ace.app.agent.GoalUnderstandingEngine
 import com.ace.app.agent.ScreenObservation
 import com.ace.app.agent.ScreenObservationEngine
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +43,82 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val apiKey = prefs.getString(KEY_API_KEY, "") ?: ""
         return apiKey.isNotBlank()
+    }
+
+    override suspend fun interpretGoal(
+        goal: String,
+        observation: ScreenObservation,
+        context: AgentTaskContext
+    ): com.ace.app.agent.GoalInterpretation = withContext(Dispatchers.IO) {
+        val cleanGoal = goal.trim()
+        if (!isReady()) {
+            return@withContext GoalUnderstandingEngine.createInitialInterpretation(cleanGoal)
+        }
+
+        val prefs = this@CloudReasoningBrain.context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val endpoint = prefs.getString(KEY_ENDPOINT, "https://api.openai.com/v1/chat/completions") ?: "https://api.openai.com/v1/chat/completions"
+        val apiKey = prefs.getString(KEY_API_KEY, "") ?: ""
+        val modelName = prefs.getString(KEY_MODEL, "gpt-4o-mini") ?: "gpt-4o-mini"
+
+        val jsonPayload = JSONObject().apply {
+            put("model", modelName)
+            put("messages", org.json.JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", "Analyze the user's natural language goal semantically. Return JSON: {\"objectiveType\":\"INFORMATION_RETRIEVAL|STATE_MODIFICATION|GENERAL\",\"requestedOutcome\":\"<outcome>\",\"targetEntities\":[\"<entity>\"],\"desiredState\":\"<state>\",\"desiredInformation\":\"<info>\",\"isAmbiguous\":false,\"clarificationQuestion\":null}")
+                })
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", "Goal: $cleanGoal")
+                })
+            })
+            put("temperature", 0.1)
+        }
+
+        try {
+            val body = jsonPayload.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .post(body)
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val responseBodyStr = response.body?.string() ?: ""
+
+            if (response.isSuccessful && responseBodyStr.isNotBlank()) {
+                val jsonRes = JSONObject(responseBodyStr)
+                val choices = jsonRes.optJSONArray("choices")
+                val contentStr = choices?.optJSONObject(0)?.optJSONObject("message")?.optString("content", "") ?: ""
+
+                val rawTrimmed = contentStr.trim()
+                val sStart = rawTrimmed.indexOf('{')
+                val sEnd = rawTrimmed.lastIndexOf('}')
+                if (sStart != -1 && sEnd > sStart) {
+                    val json = JSONObject(rawTrimmed.substring(sStart, sEnd + 1))
+                    val typeStr = json.optString("objectiveType", "GENERAL")
+                    val isAmbig = json.optBoolean("isAmbiguous", false)
+                    val q = if (isAmbig) json.optString("clarificationQuestion", "Could you clarify your goal?") else null
+                    val entities = mutableListOf<String>()
+                    val arr = json.optJSONArray("targetEntities")
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) entities.add(arr.optString(i))
+                    }
+                    return@withContext com.ace.app.agent.GoalInterpretation(
+                        rawGoal = cleanGoal,
+                        objectiveType = typeStr,
+                        requestedOutcome = json.optString("requestedOutcome", cleanGoal),
+                        targetEntities = entities.ifEmpty { listOf(cleanGoal) },
+                        desiredFinalState = json.optString("desiredState", "Observable state for $cleanGoal"),
+                        desiredInformation = json.optString("desiredInformation", "Information for $cleanGoal"),
+                        isAmbiguous = isAmbig,
+                        clarificationQuestion = q
+                    )
+                }
+            }
+        } catch (_: Exception) {}
+
+        return@withContext GoalUnderstandingEngine.createInitialInterpretation(cleanGoal)
     }
 
     override suspend fun reasonNextDecision(

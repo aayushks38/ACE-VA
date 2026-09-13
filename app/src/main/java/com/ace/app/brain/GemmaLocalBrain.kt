@@ -330,6 +330,61 @@ class GemmaLocalBrain : LocalBrain {
 
     override val backendType: ReasoningBackend = ReasoningBackend.LOCAL_GEMMA
 
+    override suspend fun interpretGoal(
+        goal: String,
+        observation: ScreenObservation,
+        context: com.ace.app.agent.AgentTaskContext
+    ): GoalInterpretation = withContext(Dispatchers.IO) {
+        val cleanGoal = goal.trim()
+        if (llamaBridge == null || !isReady()) {
+            return@withContext GoalUnderstandingEngine.createInitialInterpretation(cleanGoal)
+        }
+
+        val prompt = buildString {
+            append("<start_of_turn>user\n")
+            append("You are ACE, an autonomous computer-use agent. Analyze goal semantically:\n")
+            append("Goal: $cleanGoal\n")
+            append("Return compact JSON object:\n")
+            append("{\"objectiveType\":\"INFORMATION_RETRIEVAL|STATE_MODIFICATION|GENERAL\",\"requestedOutcome\":\"<outcome>\",\"targetEntities\":[\"<entity>\"],\"desiredState\":\"<state>\",\"desiredInformation\":\"<info>\",\"isAmbiguous\":false,\"clarificationQuestion\":null}\n")
+            append("<end_of_turn>\n<start_of_turn>model\n{")
+        }
+
+        val rawOutput = try {
+            llamaBridge?.generate(prompt, maxTokens = 64) ?: ""
+        } catch (_: Exception) { "" }
+
+        if (rawOutput.isNotBlank()) {
+            try {
+                val candidate = if (!rawOutput.trim().startsWith("{")) "{" + rawOutput.trim() else rawOutput.trim()
+                val sStart = candidate.indexOf('{')
+                val sEnd = candidate.lastIndexOf('}')
+                if (sStart != -1 && sEnd > sStart) {
+                    val json = JSONObject(candidate.substring(sStart, sEnd + 1))
+                    val typeStr = json.optString("objectiveType", "GENERAL")
+                    val isAmbig = json.optBoolean("isAmbiguous", false)
+                    val q = if (isAmbig) json.optString("clarificationQuestion", "Could you clarify your goal?") else null
+                    val entities = mutableListOf<String>()
+                    val arr = json.optJSONArray("targetEntities")
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) entities.add(arr.optString(i))
+                    }
+                    return@withContext GoalInterpretation(
+                        rawGoal = cleanGoal,
+                        objectiveType = typeStr,
+                        requestedOutcome = json.optString("requestedOutcome", cleanGoal),
+                        targetEntities = entities.ifEmpty { listOf(cleanGoal) },
+                        desiredFinalState = json.optString("desiredState", "Observable state for $cleanGoal"),
+                        desiredInformation = json.optString("desiredInformation", "Information for $cleanGoal"),
+                        isAmbiguous = isAmbig,
+                        clarificationQuestion = q
+                    )
+                }
+            } catch (_: Exception) {}
+        }
+
+        return@withContext GoalUnderstandingEngine.createInitialInterpretation(cleanGoal)
+    }
+
     override suspend fun reasonNextDecision(
         goal: String,
         observation: ScreenObservation,

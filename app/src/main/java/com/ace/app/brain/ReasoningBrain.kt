@@ -1,6 +1,8 @@
 package com.ace.app.brain
 
 import com.ace.app.agent.AgentTaskContext
+import com.ace.app.agent.GoalInterpretation
+import com.ace.app.agent.GoalUnderstandingEngine
 import com.ace.app.agent.ScreenObservation
 
 enum class ReasoningBackend {
@@ -36,11 +38,21 @@ sealed class AgentDecision {
  */
 interface ReasoningBrain {
     val backendType: ReasoningBackend
+
+    suspend fun interpretGoal(
+        goal: String,
+        observation: ScreenObservation,
+        context: AgentTaskContext
+    ): GoalInterpretation {
+        return GoalUnderstandingEngine.createInitialInterpretation(goal)
+    }
+
     suspend fun reasonNextDecision(
         goal: String,
         observation: ScreenObservation,
         context: AgentTaskContext,
         generationId: Long = 0L
     ): AgentDecision
+
     fun isReady(): Boolean
 }

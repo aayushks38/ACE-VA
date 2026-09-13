@@ -12,16 +12,26 @@ class AutonomousAgentArchitectureTest {
     // 1. Ambiguous goals result in clarification rather than guessed execution.
     @Test
     fun testAmbiguousGoalResultsInClarification() {
-        val objective = GoalUnderstandingEngine.deriveObjective("do")
-        assertTrue("Single ambiguous word must mark objective ambiguous", objective.isAmbiguous)
+        val modelInterp = GoalInterpretation(
+            rawGoal = "do",
+            isAmbiguous = true,
+            clarificationQuestion = "Could you please clarify what specific task you would like me to perform?"
+        )
+        val objective = GoalUnderstandingEngine.convertInterpretationToObjective(modelInterp)
+        assertTrue("Model-determined ambiguous goal must mark objective ambiguous", objective.isAmbiguous)
         assertNotNull("Clarification question must be provided", objective.clarificationQuestion)
     }
 
     // 2. Informational goals become information-oriented objectives.
     @Test
     fun testInformationalGoalObjective() {
-        val objective = GoalUnderstandingEngine.deriveObjective("What is the current time?")
-        assertTrue("Informational goal must be recognized", objective.isInformational)
+        val modelInterp = GoalInterpretation(
+            rawGoal = "What is the current time?",
+            objectiveType = "INFORMATION_RETRIEVAL",
+            desiredInformation = "Current system date and time"
+        )
+        val objective = GoalUnderstandingEngine.convertInterpretationToObjective(modelInterp)
+        assertTrue("Informational goal must be recognized from model interpretation", objective.isInformational)
         assertTrue("Desired information string must be populated", objective.desiredInformation.isNotBlank())
     }
 
@@ -230,5 +240,16 @@ class AutonomousAgentArchitectureTest {
         assertTrue("Task 2 action history must be empty", task2Context.actionHistory.isEmpty())
         assertTrue("Task 2 evidence map must be empty", task2Context.capturedEvidence.isEmpty())
         assertNotEquals(task1Context.generationId, task2Context.generationId)
+    }
+
+    // 15. Goal interpretation contract is model-driven and contains zero Kotlin string intent classifiers.
+    @Test
+    fun testModelDrivenGoalInterpretationContract() {
+        val interp = GoalUnderstandingEngine.createInitialInterpretation("Check account status")
+        assertFalse("Initial neutral interpretation must not assume ambiguity without model decision", interp.isAmbiguous)
+        assertEquals("Check account status", interp.rawGoal)
+        val postcondition = GoalUnderstandingEngine.derivePostconditionFromInterpretation(interp)
+        assertNotNull(postcondition.summary)
+        assertTrue(postcondition.targetEntities.contains("Check account status"))
     }
 }

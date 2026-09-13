@@ -10,7 +10,8 @@ data class ExpectedPostcondition(
     val desiredInformation: String = "",
     val desiredEnvironmentCondition: String = "",
     val targetEntities: List<String> = emptyList(),
-    val constraints: List<String> = emptyList()
+    val constraints: List<String> = emptyList(),
+    val successConditions: List<String> = emptyList()
 )
 
 /**

@@ -18,8 +18,18 @@ class AgentExecutor(private val context: Context?) {
         onConversationalResponse: (String) -> Unit,
         generationId: Long
     ): AgentTask {
-        val objective = GoalUnderstandingEngine.deriveObjective(userGoal)
-        val postcondition = GoalUnderstandingEngine.derivePostcondition(userGoal)
+        var lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
+        val initialContext = AgentTaskContext(userGoal = userGoal, generationId = generationId)
+        val initialBrain = com.ace.app.brain.BrainRouter.selectBrain(userGoal, lastObservation, initialContext, localBrain, cloudBrain)
+
+        val interpretation = try {
+            initialBrain.interpretGoal(userGoal, lastObservation, initialContext)
+        } catch (_: Exception) {
+            GoalUnderstandingEngine.createInitialInterpretation(userGoal)
+        }
+
+        val objective = GoalUnderstandingEngine.convertInterpretationToObjective(interpretation)
+        val postcondition = GoalUnderstandingEngine.derivePostconditionFromInterpretation(interpretation)
         val taskContext = AgentTaskContext(
             userGoal = userGoal,
             expectedPostcondition = postcondition,
@@ -50,7 +60,7 @@ class AgentExecutor(private val context: Context?) {
         onStepUpdated(currentTask)
 
         val maxIterations = 8
-        var lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
+        lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
 
         for (iteration in 1..maxIterations) {
             if (!AceTaskSessionManager.isCurrentGeneration(generationId)) {
