@@ -358,11 +358,22 @@ class AutonomousAgentArchitectureTest {
     @Test
     fun testValidGemmaJsonParsing() {
         val brain = com.ace.app.brain.GemmaLocalBrain()
-        val rawJson = """{"objectiveType":"INFORMATION_RETRIEVAL","requestedOutcome":"Find admissions","targetEntities":["Ketam University"],"desiredInformation":"Admission requirements","clarificationRequired":false}"""
+        val rawJson = """{
+            "objectiveType": "INFORMATION_RETRIEVAL",
+            "requestedOutcome": "Find admissions",
+            "targetEntities": ["Ketam University"],
+            "desiredState": "",
+            "desiredInformation": "Admission requirements",
+            "clarificationRequired": false,
+            "clarificationQuestion": null
+        }"""
         val parsed = brain.extractJsonObject(rawJson)
-        assertNotNull("Valid JSON must be extracted", parsed)
+        assertNotNull("Valid JSON matching strict schema must be extracted", parsed)
         assertEquals("INFORMATION_RETRIEVAL", parsed?.objectiveType)
         assertEquals("Find admissions", parsed?.requestedOutcome)
+        assertEquals(listOf("Ketam University"), parsed?.targetEntities)
+        assertFalse(parsed?.clarificationRequired == true)
+        assertNull(parsed?.clarificationQuestion)
     }
 
     // 23. Fenced valid JSON block is stripped and extracted cleanly.
@@ -375,13 +386,17 @@ class AutonomousAgentArchitectureTest {
               "objectiveType": "STATE_MODIFICATION",
               "requestedOutcome": "Turn on flashlight",
               "targetEntities": ["Flashlight"],
-              "clarificationRequired": false
+              "desiredState": "Flashlight ON",
+              "desiredInformation": "",
+              "clarificationRequired": false,
+              "clarificationQuestion": null
             }
             ```
         """.trimIndent()
         val parsed = brain.extractJsonObject(fencedJson)
-        assertNotNull("Fenced JSON block must be extracted", parsed)
+        assertNotNull("Fenced JSON block matching strict schema must be extracted", parsed)
         assertEquals("STATE_MODIFICATION", parsed?.objectiveType)
+        assertEquals("Turn on flashlight", parsed?.requestedOutcome)
     }
 
     // 24. Malformed/unparseable model output returns null and does NOT fallback to keyword match.
@@ -391,5 +406,80 @@ class AutonomousAgentArchitectureTest {
         val malformed = "I am an AI assistant. I will find what requirements and documents you need."
         val parsed = brain.extractJsonObject(malformed)
         assertNull("Plain text output without JSON structure must return null without keyword fallback", parsed)
+    }
+
+    // 25. Truncated JSON without closing brace returns null and is NOT repaired.
+    @Test
+    fun testTruncatedJsonReturnsNullWithoutRepair() {
+        val brain = com.ace.app.brain.GemmaLocalBrain()
+        val truncated = """{"objectiveType":"INFORMATION_RETRIEVAL","requestedOutcome":"Find requirements""""
+        val parsed = brain.extractJsonObject(truncated)
+        assertNull("Truncated JSON without closing brace must return null without repair appending", parsed)
+    }
+
+    // 26. Invalid objectiveType enum value is rejected.
+    @Test
+    fun testInvalidObjectiveTypeEnumReturnsNull() {
+        val brain = com.ace.app.brain.GemmaLocalBrain()
+        val invalidEnum = """{
+            "objectiveType": "INVALID_CATEGORY",
+            "requestedOutcome": "Some action",
+            "targetEntities": [],
+            "desiredState": "",
+            "desiredInformation": "",
+            "clarificationRequired": false,
+            "clarificationQuestion": null
+        }"""
+        val parsed = brain.extractJsonObject(invalidEnum)
+        assertNull("Invalid objectiveType enum value must be rejected", parsed)
+    }
+
+    // 27. Missing required field (e.g. desiredState) is rejected.
+    @Test
+    fun testMissingRequiredFieldReturnsNull() {
+        val brain = com.ace.app.brain.GemmaLocalBrain()
+        val missingField = """{
+            "objectiveType": "INFORMATION_RETRIEVAL",
+            "requestedOutcome": "Find docs",
+            "targetEntities": ["Docs"],
+            "desiredInformation": "Doc info",
+            "clarificationRequired": false
+        }"""
+        val parsed = brain.extractJsonObject(missingField)
+        assertNull("JSON missing required desiredState field must be rejected", parsed)
+    }
+
+    // 28. clarificationRequired=true without a question is rejected.
+    @Test
+    fun testClarificationRequiredTrueWithoutQuestionReturnsNull() {
+        val brain = com.ace.app.brain.GemmaLocalBrain()
+        val invalidClarify = """{
+            "objectiveType": "GENERAL",
+            "requestedOutcome": "Incomplete task",
+            "targetEntities": [],
+            "desiredState": "",
+            "desiredInformation": "",
+            "clarificationRequired": true,
+            "clarificationQuestion": null
+        }"""
+        val parsed = brain.extractJsonObject(invalidClarify)
+        assertNull("clarificationRequired=true with null question must be rejected", parsed)
+    }
+
+    // 29. clarificationRequired=false with a non-null question is rejected.
+    @Test
+    fun testClarificationRequiredFalseWithQuestionReturnsNull() {
+        val brain = com.ace.app.brain.GemmaLocalBrain()
+        val invalidClarify = """{
+            "objectiveType": "GENERAL",
+            "requestedOutcome": "Clear task",
+            "targetEntities": [],
+            "desiredState": "",
+            "desiredInformation": "",
+            "clarificationRequired": false,
+            "clarificationQuestion": "Why are you asking?"
+        }"""
+        val parsed = brain.extractJsonObject(invalidClarify)
+        assertNull("clarificationRequired=false with non-null question must be rejected", parsed)
     }
 }

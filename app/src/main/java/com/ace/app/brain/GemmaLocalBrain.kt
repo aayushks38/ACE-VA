@@ -261,16 +261,21 @@ class GemmaLocalBrain : LocalBrain {
         val prompt = buildString {
             append("<start_of_turn>user\n")
             append("You are ACE, an autonomous computer-use cognitive agent for Android. Analyze the user goal semantically.\n")
-            append("Goal: $cleanGoal\n")
-            append("Return ONLY a valid JSON object matching this schema:\n")
+            append("Goal: $cleanGoal\n\n")
+            append("Rules:\n")
+            append("1. objectiveType must be one of: INFORMATION_RETRIEVAL, STATE_MODIFICATION, GENERAL.\n")
+            append("2. clarificationRequired must be true if the goal is ambiguous or incomplete, otherwise false.\n")
+            append("3. If clarificationRequired is true, clarificationQuestion must be a non-empty string. If false, clarificationQuestion must be null.\n")
+            append("4. All fields shown in the schema template below are required.\n\n")
+            append("Return ONLY a valid JSON object matching this schema template:\n")
             append("{\n")
-            append("  \"objectiveType\": \"INFORMATION_RETRIEVAL\"|\"STATE_MODIFICATION\"|\"GENERAL\",\n")
-            append("  \"requestedOutcome\": \"<outcome summary>\",\n")
-            append("  \"targetEntities\": [\"<entity1>\", \"<entity2>\"],\n")
-            append("  \"desiredState\": \"<desired final state>\",\n")
-            append("  \"desiredInformation\": \"<desired information>\",\n")
-            append("  \"clarificationRequired\": true|false,\n")
-            append("  \"clarificationQuestion\": \"<question if ambiguous, else null>\"\n")
+            append("  \"objectiveType\": \"INFORMATION_RETRIEVAL\",\n")
+            append("  \"requestedOutcome\": \"Find the requested information\",\n")
+            append("  \"targetEntities\": [\"example entity\"],\n")
+            append("  \"desiredState\": \"\",\n")
+            append("  \"desiredInformation\": \"The information requested by the user\",\n")
+            append("  \"clarificationRequired\": false,\n")
+            append("  \"clarificationQuestion\": null\n")
             append("}\n")
             append("<end_of_turn>\n")
             append("<start_of_turn>model\n")
@@ -298,7 +303,7 @@ class GemmaLocalBrain : LocalBrain {
             val result = GoalInterpretation(
                 rawGoal = cleanGoal,
                 objectiveType = jsonObj.objectiveType,
-                requestedOutcome = jsonObj.requestedOutcome.ifBlank { cleanGoal },
+                requestedOutcome = jsonObj.requestedOutcome,
                 targetEntities = jsonObj.targetEntities,
                 desiredFinalState = jsonObj.desiredState,
                 desiredInformation = jsonObj.desiredInformation,
@@ -312,7 +317,7 @@ class GemmaLocalBrain : LocalBrain {
             Log.e(TAG_BRAIN, "ACE_BRAIN: JSON_EXTRACTION_RESULT=FAILED")
         }
 
-        Log.e(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_FAILURE BRAIN_INSTANCE_ID=$instanceId reason=\"Model output could not be parsed as valid JSON\"")
+        Log.e(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_FAILURE BRAIN_INSTANCE_ID=$instanceId reason=\"Model output could not be parsed as valid JSON matching structural schema\"")
         return@withContext GoalInterpretation(
             rawGoal = cleanGoal,
             objectiveType = "INTERPRETATION_PARSE_FAILED",
@@ -322,16 +327,16 @@ class GemmaLocalBrain : LocalBrain {
 
     /** Helper data structure for model goal interpretation. */
     data class ParsedGoalJson(
-        val objectiveType: String = "GENERAL",
-        val requestedOutcome: String = "",
-        val targetEntities: List<String> = emptyList(),
-        val desiredState: String = "",
-        val desiredInformation: String = "",
-        val clarificationRequired: Boolean = false,
-        val clarificationQuestion: String? = null
+        val objectiveType: String,
+        val requestedOutcome: String,
+        val targetEntities: List<String>,
+        val desiredState: String,
+        val desiredInformation: String,
+        val clarificationRequired: Boolean,
+        val clarificationQuestion: String?
     )
 
-    /** Helper function to robustly extract a ParsedGoalJson from model output text. */
+    /** Helper function to extract a ParsedGoalJson from model output text strictly. */
     fun extractJsonObject(rawOutput: String): ParsedGoalJson? {
         if (rawOutput.isBlank()) return null
         val trimmed = rawOutput.trim()
@@ -342,43 +347,77 @@ class GemmaLocalBrain : LocalBrain {
             .replace(Regex("""\s*```$"""), "")
             .trim()
 
-        // 2. Extract substring between first '{' and last '}'
+        // 2. Extract substring between first '{' and last '}' ONLY — NO repair appending
         val firstBrace = cleanText.indexOf('{')
         val lastBrace = cleanText.lastIndexOf('}')
 
-        val candidate = if (firstBrace != -1 && lastBrace > firstBrace) {
-            cleanText.substring(firstBrace, lastBrace + 1)
-        } else if (firstBrace != -1) {
-            val partial = cleanText.substring(firstBrace)
-            if (partial.endsWith("\"")) "$partial}" else "$partial\"}"
-        } else {
-            cleanText
+        if (firstBrace == -1 || lastBrace <= firstBrace) {
+            return null
         }
+        val candidate = cleanText.substring(firstBrace, lastBrace + 1)
 
-        if (!candidate.contains("\"") && !candidate.contains(":")) return null
+        if (!candidate.contains("\"") || !candidate.contains(":")) return null
 
         // Try Android org.json.JSONObject first
         try {
             val json = JSONObject(candidate)
-            val typeStr = json.optString("objectiveType", "GENERAL").uppercase()
-            val isAmbig = json.optBoolean("clarificationRequired", json.optBoolean("isAmbiguous", false))
-            val q = if (isAmbig) json.optString("clarificationQuestion", "Could you please specify your goal in more detail?") else null
-            val entities = mutableListOf<String>()
-            val arr = json.optJSONArray("targetEntities")
-            if (arr != null) {
-                for (i in 0 until arr.length()) {
-                    val ent = arr.optString(i)
-                    if (ent.isNotBlank()) entities.add(ent)
-                }
+
+            // 1. Validate objectiveType
+            if (!json.has("objectiveType") || json.isNull("objectiveType")) return null
+            val objType = json.getString("objectiveType").trim().uppercase()
+            if (objType !in setOf("INFORMATION_RETRIEVAL", "STATE_MODIFICATION", "GENERAL")) {
+                return null
             }
+
+            // 2. Validate requestedOutcome
+            if (!json.has("requestedOutcome") || json.isNull("requestedOutcome")) return null
+            val requestedOutcome = json.getString("requestedOutcome").trim()
+            if (requestedOutcome.isBlank()) return null
+
+            // 3. Validate targetEntities
+            if (!json.has("targetEntities") || json.isNull("targetEntities")) return null
+            val arr = json.optJSONArray("targetEntities") ?: return null
+            val entities = mutableListOf<String>()
+            for (i in 0 until arr.length()) {
+                val ent = arr.optString(i, null) ?: return null
+                entities.add(ent)
+            }
+
+            // 4. Validate desiredState
+            if (!json.has("desiredState") || json.isNull("desiredState")) return null
+            val desiredState = json.getString("desiredState")
+
+            // 5. Validate desiredInformation
+            if (!json.has("desiredInformation") || json.isNull("desiredInformation")) return null
+            val desiredInformation = json.getString("desiredInformation")
+
+            // 6. Validate clarificationRequired
+            if (!json.has("clarificationRequired") || json.isNull("clarificationRequired")) return null
+            val clarReq = try { json.getBoolean("clarificationRequired") } catch (_: Exception) { return null }
+
+            // 7. Validate clarificationQuestion
+            val clarQuestion: String?
+            if (clarReq) {
+                if (!json.has("clarificationQuestion") || json.isNull("clarificationQuestion")) return null
+                val q = json.getString("clarificationQuestion").trim()
+                if (q.isBlank()) return null
+                clarQuestion = q
+            } else {
+                if (json.has("clarificationQuestion") && !json.isNull("clarificationQuestion")) {
+                    val q = json.getString("clarificationQuestion").trim()
+                    if (q.isNotBlank()) return null
+                }
+                clarQuestion = null
+            }
+
             return ParsedGoalJson(
-                objectiveType = typeStr,
-                requestedOutcome = json.optString("requestedOutcome", ""),
+                objectiveType = objType,
+                requestedOutcome = requestedOutcome,
                 targetEntities = entities,
-                desiredState = json.optString("desiredState", ""),
-                desiredInformation = json.optString("desiredInformation", ""),
-                clarificationRequired = isAmbig,
-                clarificationQuestion = q
+                desiredState = desiredState,
+                desiredInformation = desiredInformation,
+                clarificationRequired = clarReq,
+                clarificationQuestion = clarQuestion
             )
         } catch (_: Throwable) {
             // Fallback for JVM unit tests where org.json is stubbed
@@ -388,36 +427,69 @@ class GemmaLocalBrain : LocalBrain {
 
     private fun parseGoalJsonWithRegex(text: String): ParsedGoalJson? {
         try {
+            // 1. objectiveType: must exist and be one of INFORMATION_RETRIEVAL, STATE_MODIFICATION, GENERAL
             val typeMatch = Regex("""\"objectiveType\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
-            val outcomeMatch = Regex("""\"requestedOutcome\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
-            val stateMatch = Regex("""\"desiredState\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
-            val infoMatch = Regex("""\"desiredInformation\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
-            val ambigMatch = Regex("""\"clarificationRequired\"\s*:\s*(true|false)""", RegexOption.IGNORE_CASE).find(text)
-            val questionMatch = Regex("""\"clarificationQuestion\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
-
-            val entities = mutableListOf<String>()
-            val arrMatch = Regex("""\"targetEntities\"\s*:\s*\[([^\]]+)\]""", RegexOption.IGNORE_CASE).find(text)
-            if (arrMatch != null) {
-                val rawArr = arrMatch.groupValues[1]
-                Regex("""\"([^\"]+)\"""").findAll(rawArr).forEach { m ->
-                    entities.add(m.groupValues[1])
-                }
+                ?: return null
+            val objType = typeMatch.groupValues[1].trim().uppercase()
+            if (objType !in setOf("INFORMATION_RETRIEVAL", "STATE_MODIFICATION", "GENERAL")) {
+                return null
             }
 
-            if (typeMatch == null && outcomeMatch == null && ambigMatch == null) return null
+            // 2. requestedOutcome: must exist and be non-blank
+            val outcomeMatch = Regex("""\"requestedOutcome\"\s*:\s*\"([^\"]*)\"""", RegexOption.IGNORE_CASE).find(text)
+                ?: return null
+            val requestedOutcome = outcomeMatch.groupValues[1].trim()
+            if (requestedOutcome.isBlank()) return null
 
-            val objType = typeMatch?.groupValues?.get(1)?.uppercase() ?: "GENERAL"
-            val isAmbig = ambigMatch?.groupValues?.get(1)?.lowercase() == "true"
-            val q = if (isAmbig) questionMatch?.groupValues?.get(1) ?: "Could you please clarify your goal?" else null
+            // 3. targetEntities: must exist as a JSON array
+            val arrMatch = Regex("""\"targetEntities\"\s*:\s*\[([^\]]*)\]""", RegexOption.IGNORE_CASE).find(text)
+                ?: return null
+            val rawArr = arrMatch.groupValues[1]
+            val entities = mutableListOf<String>()
+            Regex("""\"([^\"]*)\"""").findAll(rawArr).forEach { m ->
+                entities.add(m.groupValues[1])
+            }
+
+            // 4. desiredState: must exist
+            val stateMatch = Regex("""\"desiredState\"\s*:\s*\"([^\"]*)\"""", RegexOption.IGNORE_CASE).find(text)
+                ?: return null
+            val desiredState = stateMatch.groupValues[1]
+
+            // 5. desiredInformation: must exist
+            val infoMatch = Regex("""\"desiredInformation\"\s*:\s*\"([^\"]*)\"""", RegexOption.IGNORE_CASE).find(text)
+                ?: return null
+            val desiredInformation = infoMatch.groupValues[1]
+
+            // 6. clarificationRequired: must exist as boolean
+            val ambigMatch = Regex("""\"clarificationRequired\"\s*:\s*(true|false)\b""", RegexOption.IGNORE_CASE).find(text)
+                ?: return null
+            val clarReq = ambigMatch.groupValues[1].lowercase() == "true"
+
+            // 7. clarificationQuestion
+            val clarQuestion: String?
+            if (clarReq) {
+                val questionMatch = Regex("""\"clarificationQuestion\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
+                    ?: return null
+                val q = questionMatch.groupValues[1].trim()
+                if (q.isBlank()) return null
+                clarQuestion = q
+            } else {
+                val nullOrEmptyMatch = Regex("""\"clarificationQuestion\"\s*:\s*(null|\"\"|\"\s*\")""", RegexOption.IGNORE_CASE).find(text)
+                val strMatch = Regex("""\"clarificationQuestion\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
+                if (strMatch != null && strMatch.groupValues[1].trim().isNotBlank() && nullOrEmptyMatch == null) {
+                    return null
+                }
+                clarQuestion = null
+            }
 
             return ParsedGoalJson(
                 objectiveType = objType,
-                requestedOutcome = outcomeMatch?.groupValues?.get(1) ?: "",
+                requestedOutcome = requestedOutcome,
                 targetEntities = entities,
-                desiredState = stateMatch?.groupValues?.get(1) ?: "",
-                desiredInformation = infoMatch?.groupValues?.get(1) ?: "",
-                clarificationRequired = isAmbig,
-                clarificationQuestion = q
+                desiredState = desiredState,
+                desiredInformation = desiredInformation,
+                clarificationRequired = clarReq,
+                clarificationQuestion = clarQuestion
             )
         } catch (_: Throwable) {
             return null
