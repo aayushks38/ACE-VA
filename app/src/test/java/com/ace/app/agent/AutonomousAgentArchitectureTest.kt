@@ -179,8 +179,8 @@ class AutonomousAgentArchitectureTest {
         val context = AgentTaskContext(userGoal = "Perform task")
         val obs = ScreenObservation(packageName = "com.app", appName = "App", visibleText = listOf("Main"), screenState = "Main")
 
-        // BrainRouter when no local or cloud brain is ready
-        val selectedBrain = BrainRouter.selectBrain("Perform task", obs, context, null, null)
+        // BrainRouter when no local brain is ready
+        val selectedBrain = BrainRouter.selectBrain("Perform task", obs, context, null)
         assertFalse("Selected brain must not be ready when no backend exists", selectedBrain.isReady())
 
         // Invoking reasonNextDecision on unready router must return Blocked decision, NOT a guessed action

@@ -343,11 +343,9 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                     android.util.Log.i("ACE_BRAIN", "ACE_BRAIN: deep_generation_started")
                     android.util.Log.i("ACE_BRAIN", "ACE_BRAIN: submitting goal='$cleanGoal'")
 
-                    val cloudBrain = com.ace.app.brain.CloudReasoningBrain(context)
                     val finalTask = executor.runAutonomousAgentLoop(
                         userGoal = cleanGoal,
                         localBrain = brain,
-                        cloudBrain = cloudBrain,
                         onStepUpdated = { updatedTask ->
                             if (AceTaskSessionManager.isCurrentGeneration(generationId)) {
                                 _uiState.value = _uiState.value.copy(activeTask = updatedTask)

@@ -12,7 +12,6 @@ class AgentExecutor(private val context: Context?) {
     suspend fun runAutonomousAgentLoop(
         userGoal: String,
         localBrain: com.ace.app.brain.LocalBrain?,
-        cloudBrain: com.ace.app.brain.ReasoningBrain?,
         onStepUpdated: (AgentTask) -> Unit,
         onClarificationNeeded: (String) -> Unit,
         onConversationalResponse: (String) -> Unit,
@@ -20,7 +19,7 @@ class AgentExecutor(private val context: Context?) {
     ): AgentTask {
         var lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
         val initialContext = AgentTaskContext(userGoal = userGoal, generationId = generationId)
-        val initialBrain = com.ace.app.brain.BrainRouter.selectBrain(userGoal, lastObservation, initialContext, localBrain, cloudBrain)
+        val initialBrain = com.ace.app.brain.BrainRouter.selectBrain(userGoal, lastObservation, initialContext, localBrain)
 
         if (!initialBrain.isReady()) {
             val blockedMsg = "No reasoning backend is ready to process user goal."
@@ -103,7 +102,7 @@ class AgentExecutor(private val context: Context?) {
 
             // 2. REASON: Select ReasoningBrain via BrainRouter & Query next AgentDecision
             val decision = try {
-                val brain = com.ace.app.brain.BrainRouter.selectBrain(taskContext.userGoal, obs, taskContext, localBrain, cloudBrain)
+                val brain = com.ace.app.brain.BrainRouter.selectBrain(taskContext.userGoal, obs, taskContext, localBrain)
                 brain.reasonNextDecision(taskContext.userGoal, obs, taskContext, generationId)
             } catch (e: Exception) {
                 Log.e("ACE_ERROR", "ACE_ERROR: Brain reasoning failed", e)
@@ -142,7 +141,7 @@ class AgentExecutor(private val context: Context?) {
                     taskContext.capturedEvidence["brain_completion_hypothesis"] = decision.evidence
 
                     // INDEPENDENT & MODEL-GROUNDED POSTCONDITION VERIFICATION
-                    val brain = com.ace.app.brain.BrainRouter.selectBrain(taskContext.userGoal, obs, taskContext, localBrain, cloudBrain)
+                    val brain = com.ace.app.brain.BrainRouter.selectBrain(taskContext.userGoal, obs, taskContext, localBrain)
                     val verificationOutcome = brain.verifyPostcondition(taskContext.userGoal, obs, taskContext)
                     Log.i("ACE_VERIFY", "ACE_VERIFY: Postcondition verification result isVerified=${verificationOutcome.isVerified} status=${verificationOutcome.status} summary=${verificationOutcome.summary}")
 

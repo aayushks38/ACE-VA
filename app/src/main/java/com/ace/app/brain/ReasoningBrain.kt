@@ -7,7 +7,6 @@ import com.ace.app.agent.ScreenObservation
 
 enum class ReasoningBackend {
     LOCAL_GEMMA,
-    CLOUD_PROVIDER,
     DETERMINISTIC_FAST_PATH
 }
 
