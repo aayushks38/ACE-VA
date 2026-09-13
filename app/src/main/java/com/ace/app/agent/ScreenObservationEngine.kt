@@ -197,4 +197,30 @@ object ScreenObservationEngine {
         if (observation.clickableElements.any { it.text.lowercase().contains("search") || it.contentDescription.lowercase().contains("search") }) return 0.8f
         return 0.3f
     }
+
+    /**
+     * Bounded event/state-change polling helper to wait for UI stability rather than static sleeps.
+     */
+    suspend fun waitForUiSettled(
+        previousObservation: ScreenObservation,
+        fetchFreshRoot: () -> AccessibilityNodeInfo?,
+        currentPackage: String,
+        appName: String,
+        maxWaitMs: Long = 600L
+    ): ScreenObservation {
+        val startTime = System.currentTimeMillis()
+        var latestObs = captureObservation(fetchFreshRoot(), currentPackage, appName)
+        while (System.currentTimeMillis() - startTime < maxWaitMs) {
+            kotlinx.coroutines.delay(100)
+            val freshRoot = fetchFreshRoot()
+            val nextObs = captureObservation(freshRoot, currentPackage, appName)
+            if (nextObs.packageName != previousObservation.packageName ||
+                nextObs.visibleText != previousObservation.visibleText ||
+                nextObs.clickableElements.size != previousObservation.clickableElements.size) {
+                return nextObs
+            }
+            latestObs = nextObs
+        }
+        return latestObs
+    }
 }

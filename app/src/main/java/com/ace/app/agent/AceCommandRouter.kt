@@ -130,110 +130,18 @@ class AceCommandRouter {
         }
 
         // LEVEL 2: GENERAL-PURPOSE NLU BRAIN ROUTING (Priority 3: Gemma General Agent)
-        // When Gemma brain is loaded and available, route complex/natural language goals to Gemma
-        if (brainAvailable) {
-            val result = RoutingResult(
-                route = RouteType.DEEP_BRAIN,
-                confidence = 0.95f,
-                workflow = null,
-                reason = "nlu_brain_available",
-                executionMode = ExecutionMode.BRAIN,
-                brainRequired = true,
-                brainAvailable = true
-            )
-            logRouting(clean, complexity, false, RouteType.DEEP_BRAIN, false, "nlu_brain_available", ExecutionMode.BRAIN, true, true)
-            return CommandRoute.DeepBrain(result)
-        }
-
-        // Level 2: STRUCTURED CAPABILITY WORKFLOWS (Pattern Extraction)
-        val structuredSteps = extractStructuredWorkflow(clean)
-        if (structuredSteps.isNotEmpty()) {
-            val plan = AgentPlan(
-                userGoal = clean,
-                intent = "structured_workflow",
-                channel = CommunicationChannel.PHONE,
-                targetEntity = null,
-                steps = structuredSteps
-            )
-            val result = RoutingResult(
-                route = RouteType.STRUCTURED_WORKFLOW,
-                confidence = 0.95f,
-                workflow = plan,
-                reason = "structured_capability_workflow",
-                executionMode = ExecutionMode.DETERMINISTIC,
-                brainRequired = false,
-                brainAvailable = brainAvailable
-            )
-            logRouting(clean, complexity, true, RouteType.STRUCTURED_WORKFLOW, true, "structured_capability_workflow", ExecutionMode.DETERMINISTIC, false, brainAvailable)
-            logWorkflow(structuredSteps)
-            return CommandRoute.Workflow(result, plan)
-        }
-
-        // Level 3: DETERMINISTIC MULTI-STEP WORKFLOW
-        if (complexity > 1) {
-            val allSteps = mutableListOf<TaskStep>()
-            var stepCounter = 1
-            var allResolved = true
-
-            var activeApp: String? = null
-            for (subCmd in subCommands) {
-                val steps = resolveSubCommand(subCmd, stepCounter)
-                if (steps.isEmpty()) {
-                    allResolved = false
-                    break
-                }
-                val processedSteps = steps.map { step ->
-                    val appInStep = step.inputParams["app"] ?: step.inputParams["appName"]
-                    if (!appInStep.isNullOrBlank()) activeApp = appInStep
-                    val currentApp = activeApp
-                    if ((step.capabilityId == "web_search" || step.capabilityId == "media_playback") && !currentApp.isNullOrBlank() && !step.inputParams.containsKey("app")) {
-                        val newParams = step.inputParams.toMutableMap()
-                        newParams["app"] = currentApp
-                        newParams["appName"] = currentApp
-                        step.copy(inputParams = newParams)
-                    } else {
-                        step
-                    }
-                }
-                allSteps.addAll(processedSteps)
-                stepCounter += processedSteps.size
-            }
-
-            if (allResolved && allSteps.isNotEmpty()) {
-                val plan = AgentPlan(
-                    userGoal = clean,
-                    intent = "deterministic_workflow",
-                    channel = CommunicationChannel.PHONE,
-                    targetEntity = null,
-                    steps = allSteps
-                )
-                val result = RoutingResult(
-                    route = RouteType.DETERMINISTIC_WORKFLOW,
-                    confidence = 0.95f,
-                    workflow = plan,
-                    reason = "deterministic_multi_step",
-                    executionMode = ExecutionMode.DETERMINISTIC,
-                    brainRequired = false,
-                    brainAvailable = brainAvailable
-                )
-                logRouting(clean, complexity, true, RouteType.DETERMINISTIC_WORKFLOW, true, "deterministic_multi_step", ExecutionMode.DETERMINISTIC, false, brainAvailable)
-                logWorkflow(allSteps)
-                return CommandRoute.Workflow(result, plan)
-            }
-        }
-
-        // Level 4: DEEP BRAIN (Gemma LLM Fallback)
-        val result = RoutingResult(
+        // All natural language goals route to DeepBrain for Gemma autonomous computer-use execution
+        val brainResult = RoutingResult(
             route = RouteType.DEEP_BRAIN,
-            confidence = 0.0f,
+            confidence = 0.95f,
             workflow = null,
-            reason = "reasoning_required",
-            executionMode = if (brainAvailable) ExecutionMode.BRAIN else ExecutionMode.BRAIN_UNAVAILABLE,
+            reason = if (brainAvailable) "nlu_brain_available" else "nlu_brain_required",
+            executionMode = ExecutionMode.BRAIN,
             brainRequired = true,
             brainAvailable = brainAvailable
         )
-        logRouting(clean, complexity, false, RouteType.DEEP_BRAIN, false, "reasoning_required", if (brainAvailable) ExecutionMode.BRAIN else ExecutionMode.BRAIN_UNAVAILABLE, true, brainAvailable)
-        return CommandRoute.DeepBrain(result)
+        logRouting(clean, complexity, false, RouteType.DEEP_BRAIN, false, brainResult.reason, ExecutionMode.BRAIN, true, brainAvailable)
+        return CommandRoute.DeepBrain(brainResult)
     }
 
     private fun logRouting(
