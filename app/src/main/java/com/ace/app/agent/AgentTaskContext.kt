@@ -31,4 +31,28 @@ data class AgentTaskContext(
     val userClarifications: MutableMap<String, String> = mutableMapOf(),
     var unverifiedHypothesisAttempts: Int = 0,
     val startTimeMs: Long = System.currentTimeMillis()
-)
+) {
+    fun formatCompactTaskMemory(): String = buildString {
+        if (actionHistory.isNotEmpty()) {
+            val historySnippet = if (actionHistory.size <= 8) {
+                actionHistory.joinToString(" -> ")
+            } else {
+                "(${actionHistory.size - 6} earlier actions) ... " + actionHistory.takeLast(6).joinToString(" -> ")
+            }
+            append("Action History: ").append(historySnippet).append("\n")
+        }
+        if (blockers.isNotEmpty()) {
+            append("Blockers/Failures: ").append(blockers.takeLast(4).joinToString("; ")).append("\n")
+        }
+        if (userClarifications.isNotEmpty()) {
+            val clarifs = userClarifications.entries.joinToString("; ") { "${it.key}='${it.value}'" }
+            append("User Clarifications: ").append(clarifs).append("\n")
+        }
+        val discoveries = capturedEvidence.filterKeys { it != "brain_completion_hypothesis" }
+        if (discoveries.isNotEmpty()) {
+            val discStr = discoveries.entries.take(5).joinToString("; ") { "${it.key}: ${it.value}" }
+            append("Discoveries: ").append(discStr).append("\n")
+        }
+    }
+}
+
