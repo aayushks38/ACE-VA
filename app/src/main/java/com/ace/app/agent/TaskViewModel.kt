@@ -381,13 +381,15 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                     android.util.Log.i("ACE_PERF", "ACE_PERF: route=DEEP_BRAIN start_ms=$startMs finish_ms=$finishMs duration_ms=${finishMs - startMs}")
 
                     if (AceTaskSessionManager.validateOrDiscard(generationId, "TaskViewModel.DeepBrain")) {
-                        if (finalTask.status == TaskStatus.COMPLETED && finalTask.summary.isNotBlank()) {
-                            val response = com.ace.app.voice.AssistantResponseComposer.compose(cleanGoal, finalTask)
-                            _uiState.value = _uiState.value.copy(
-                                announcement = response.displayText,
-                                currentActionLabel = ""
-                            )
+                        val response = com.ace.app.voice.AssistantResponseComposer.compose(cleanGoal, finalTask)
+                        _uiState.value = _uiState.value.copy(
+                            announcement = response.displayText,
+                            currentActionLabel = ""
+                        )
+                        if (finalTask.status == TaskStatus.COMPLETED) {
                             AceProgressSpeaker.speakTaskCompleted(response.spokenText, generationId)
+                        } else {
+                            voiceManager?.speak(response.spokenText, generationId) { AceTaskSessionManager.getCurrentGenerationId() }
                         }
                     }
                 }

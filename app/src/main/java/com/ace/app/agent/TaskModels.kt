@@ -36,6 +36,7 @@ enum class TaskStatus {
     HANDOFF_COMPLETED,
     AWAITING_USER_ACTION,
     PARTIAL,
+    BLOCKED,
     FAILED,
     WAITING_FOR_USER,
     CANCELLED
@@ -45,6 +46,7 @@ fun TaskStatus.isTerminalForAce(): Boolean {
     return this == TaskStatus.COMPLETED ||
            this == TaskStatus.HANDOFF_COMPLETED ||
            this == TaskStatus.AWAITING_USER_ACTION ||
+           this == TaskStatus.BLOCKED ||
            this == TaskStatus.FAILED ||
            this == TaskStatus.CANCELLED
 }
