@@ -15,13 +15,13 @@ data class ScreenElement(
 )
 
 data class ScreenObservation(
-    val packageName: String,
-    val appName: String,
-    val visibleText: List<String>,
-    val clickableElements: List<ScreenElement>,
-    val editableElements: List<ScreenElement>,
-    val scrollableElements: List<ScreenElement>,
-    val screenState: String, // e.g. "HOME", "SEARCH_ACTIVE", "RESULTS_LIST", "UNKNOWN"
+    val packageName: String = "android",
+    val appName: String = "System",
+    val visibleText: List<String> = emptyList(),
+    val clickableElements: List<ScreenElement> = emptyList(),
+    val editableElements: List<ScreenElement> = emptyList(),
+    val scrollableElements: List<ScreenElement> = emptyList(),
+    val screenState: String = "UNKNOWN",
     val timestamp: Long = System.currentTimeMillis()
 )
 

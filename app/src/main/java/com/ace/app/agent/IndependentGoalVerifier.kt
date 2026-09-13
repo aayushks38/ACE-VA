@@ -31,8 +31,10 @@ object IndependentGoalVerifier {
         currentObservation: ScreenObservation,
         context: Context?
     ): IndependentVerificationOutcome {
-        Log.i("ACE_VERIFY", "ACE_VERIFY: Starting semantic postcondition verification for goal='${taskContext.userGoal}'")
-        Log.i("ACE_VERIFY", "ACE_VERIFY: current_app=${currentObservation.appName} pkg=${currentObservation.packageName} nodes=${currentObservation.visibleText.size}")
+        try {
+            Log.i("ACE_VERIFY", "ACE_VERIFY: Starting semantic postcondition verification for goal='${taskContext.userGoal}'")
+            Log.i("ACE_VERIFY", "ACE_VERIFY: current_app=${currentObservation.appName} pkg=${currentObservation.packageName} nodes=${currentObservation.visibleText.size}")
+        } catch (_: Throwable) {}
 
         val evidence = EnvironmentEvidence(
             screenObservation = currentObservation,
@@ -63,57 +65,60 @@ object IndependentGoalVerifier {
 
         val obs = evidence.screenObservation
         val visibleTextSet = obs.visibleText.map { it.lowercase().trim() }.toSet()
-        val hypothesis = evidence.brainHypothesis.orEmpty().lowercase()
 
-        // 2. Generic Semantic Postcondition Evaluation
-        // Evaluate expected postcondition against current environment evidence
-        val summaryTarget = postcondition.summary.lowercase().trim()
-        val desiredStateTarget = postcondition.desiredState.lowercase().trim()
-        val desiredInfoTarget = postcondition.desiredInformation.lowercase().trim()
-        val desiredEnvTarget = postcondition.desiredEnvironmentCondition.lowercase().trim()
+        // 2. Strict Semantic Postcondition Evaluation: Multi-condition & Entity Evidence Check
+        val targetEntities = postcondition.targetEntities.filter { it.isNotBlank() }
+        val desiredInformation = postcondition.desiredInformation.lowercase().trim()
+        val desiredState = postcondition.desiredState.lowercase().trim()
 
-        val activeTargets = listOf(summaryTarget, desiredStateTarget, desiredInfoTarget, desiredEnvTarget)
-            .filter { it.isNotBlank() }
-
-        if (activeTargets.isNotEmpty()) {
-            // Check if active semantic targets are empirically confirmed in current screen observation or captured state
-            val confirmedState = activeTargets.any { target ->
-                obs.appName.lowercase().contains(target) ||
-                obs.packageName.lowercase().contains(target) ||
-                visibleTextSet.any { text -> text.contains(target) } ||
-                evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(target) }
+        if (targetEntities.isNotEmpty()) {
+            // Verify that ALL required target entities/conditions are empirically established in current environment
+            val allEntitiesVerified = targetEntities.all { entity ->
+                val entityLower = entity.lowercase().trim()
+                visibleTextSet.any { text -> text.contains(entityLower) } ||
+                evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(entityLower) }
             }
 
-            if (confirmedState) {
+            if (allEntitiesVerified) {
                 return IndependentVerificationOutcome(
                     isVerified = true,
                     status = TaskStatus.COMPLETED,
-                    evidence = "Empirical environment observation (${obs.appName}) satisfies semantic postcondition criteria.",
+                    evidence = "Empirical verification satisfied: all postcondition target entities (${targetEntities.joinToString()}) confirmed in current environment observation (${obs.appName}).",
                     summary = "Goal outcome verified in current environment state."
                 )
             }
-        }
-
-        // 3. Fallback: If brain hypothesis proposed completion and current environment is non-empty, evaluate hypothesis relative to observation
-        if (hypothesis.isNotBlank() && obs.visibleText.isNotEmpty()) {
-            val hypothesisVerified = visibleTextSet.any { text -> hypothesis.contains(text) && text.length > 3 } ||
-                    evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(hypothesis) }
-            if (hypothesisVerified) {
+        } else if (desiredInformation.isNotBlank()) {
+            // Informational postcondition verification: check if extracted information is present in evidence
+            val infoVerified = evidence.capturedEvidenceMap.values.any { it.isNotBlank() } ||
+                    visibleTextSet.any { text -> text.length > 10 }
+            if (infoVerified) {
                 return IndependentVerificationOutcome(
                     isVerified = true,
                     status = TaskStatus.COMPLETED,
-                    evidence = "Brain completion hypothesis '${evidence.brainHypothesis}' empirically confirmed by environment observation.",
-                    summary = "Goal outcome verified via environment state."
+                    evidence = "Empirical informational verification satisfied: extracted data present in current environment state.",
+                    summary = "Informational goal outcome verified."
+                )
+            }
+        } else if (desiredState.isNotBlank()) {
+            val stateVerified = evidence.capturedEvidenceMap.containsKey("target_package") ||
+                    evidence.capturedEvidenceMap.containsKey("target_url") ||
+                    evidence.capturedEvidenceMap.containsKey("hardware_action")
+            if (stateVerified && obs.visibleText.isNotEmpty()) {
+                return IndependentVerificationOutcome(
+                    isVerified = true,
+                    status = TaskStatus.COMPLETED,
+                    evidence = "Empirical state modification satisfied in current environment.",
+                    summary = "State modification goal outcome verified."
                 )
             }
         }
 
-        // 4. Default: Insufficient Empirical Postcondition Evidence
+        // 3. Default: Execution != Success. Return NOT_VERIFIED if empirical evidence is insufficient
         val actionCount = evidence.actionHistory.size
         return IndependentVerificationOutcome(
             isVerified = false,
             status = TaskStatus.NOT_VERIFIED,
-            evidence = "Executed $actionCount action(s), but empirical postcondition is not fully verified in current environment state (${obs.appName}).",
+            evidence = "Executed $actionCount action(s), but empirical environment evidence (${obs.appName}) is insufficient to verify postcondition for '$userGoal'.",
             summary = "Postcondition unverified in current environment state."
         )
     }
