@@ -36,7 +36,6 @@ enum class TaskStatus {
     HANDOFF_COMPLETED,
     AWAITING_USER_ACTION,
     PARTIAL,
-    BLOCKED,
     FAILED,
     WAITING_FOR_USER,
     CANCELLED
@@ -46,7 +45,6 @@ fun TaskStatus.isTerminalForAce(): Boolean {
     return this == TaskStatus.COMPLETED ||
            this == TaskStatus.HANDOFF_COMPLETED ||
            this == TaskStatus.AWAITING_USER_ACTION ||
-           this == TaskStatus.BLOCKED ||
            this == TaskStatus.FAILED ||
            this == TaskStatus.CANCELLED
 }
@@ -72,8 +70,7 @@ data class TaskStep(
     val isVerified: Boolean = false,
     val requiresApproval: Boolean = false,
     val output: String? = null,
-    val outputData: Map<String, String> = emptyMap(),
-    val taskGenerationId: Long = 0L
+    val outputData: Map<String, String> = emptyMap()
 )
 
 data class ToolExecutionResult(
@@ -104,6 +101,5 @@ data class AgentTask(
     val attachmentUri: String? = null,
     val verificationResult: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val completedAt: Long? = null,
-    val taskGenerationId: Long = 0L
+    val completedAt: Long? = null
 )
