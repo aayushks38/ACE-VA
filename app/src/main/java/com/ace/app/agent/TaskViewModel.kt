@@ -406,7 +406,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             else -> TaskCategory.GENERAL
         }
 
-        val taggedSteps = plan.steps.map { it.copy(taskGenerationId = generationId) }
+        val taggedSteps = plan.steps
         val task = AgentTask(
             goal = cleanGoal,
             category = category,
@@ -415,8 +415,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             steps = taggedSteps,
             requiresApproval = plan.requiresApproval,
             attachmentName = _uiState.value.attachmentName,
-            attachmentUri = _uiState.value.attachmentUri,
-            taskGenerationId = generationId
+            attachmentUri = _uiState.value.attachmentUri
         )
 
         _uiState.value = _uiState.value.copy(
