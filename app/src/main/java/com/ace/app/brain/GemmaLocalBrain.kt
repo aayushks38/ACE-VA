@@ -406,7 +406,8 @@ class GemmaLocalBrain : LocalBrain {
         val blockersStr = context.blockers.joinToString("; ")
         val prompt = buildString {
             append("<start_of_turn>user\n")
-            append("You are ACE, an autonomous computer-use agent for Android.\n")
+            append("You are ACE, an autonomous computer-use agent for Android operating a real device.\n")
+            append("The current observation is authoritative. Inspect environment before deciding.\n")
             append("Goal: $cleanGoal\n")
             append("Expected Outcome: $postconditionSummary\n")
             if (context.expectedPostcondition.targetEntities.isNotEmpty()) {
@@ -415,7 +416,7 @@ class GemmaLocalBrain : LocalBrain {
             if (historyStr.isNotBlank()) append("Previous Actions: $historyStr\n")
             if (blockersStr.isNotBlank()) append("Blockers: $blockersStr\n")
             append("Observation:\n$compactUi\n")
-            append("Choose SINGLE next decision. Return compact JSON:\n")
+            append("Choose SINGLE next decision based on current observed UI state. Return compact JSON:\n")
             append("If underspecified: {\"status\":\"CLARIFY\",\"question\":\"<question>\"}\n")
             append("If goal achieved: {\"status\":\"DONE\",\"reason\":\"<evidence>\"}\n")
             append("If replan needed: {\"status\":\"REPLAN\",\"updatedGoal\":\"<new_goal>\",\"reason\":\"<reason>\"}\n")
@@ -425,7 +426,7 @@ class GemmaLocalBrain : LocalBrain {
 
         val rawOutput = try {
             val bridge = llamaBridge
-            if (bridge != null) (bridge.generate(prompt, maxTokens = 64) ?: "") else ""
+            if (bridge != null) (bridge.generate(prompt, maxTokens = 128) ?: "") else ""
         } catch (e: Exception) {
             Log.e(TAG_ERR, "ACE_ERROR: Error during reasonNextDecision inference: ${e.message}")
             ""
@@ -463,15 +464,30 @@ class GemmaLocalBrain : LocalBrain {
                             reason = json.optString("reason", "")
                         )
                     }
+                    status == "BLOCKED" -> {
+                        AgentDecision.Blocked(json.optString("reason", "Operation blocked"))
+                    }
                     else -> {
                         val act = json.optString("action", json.optString("primitive", "ui_click"))
                         val tgt = json.optString("target", json.optString("element", ""))
                         val txt = json.optString("text", json.optString("query", ""))
-                        AgentDecision.Action(act, tgt, txt)
+                        val params = mutableMapOf<String, String>()
+                        val paramsObj = json.optJSONObject("params")
+                        if (paramsObj != null) {
+                            val keys = paramsObj.keys()
+                            while (keys.hasNext()) {
+                                val k = keys.next()
+                                params[k] = paramsObj.optString(k)
+                            }
+                        } else {
+                            listOf("url", "package", "recipient", "query", "direction", "amount", "selection").forEach { k ->
+                                if (json.has(k)) params[k] = json.optString(k)
+                            }
+                        }
+                        AgentDecision.Action(primitive = act, target = tgt, inputText = txt, params = params)
                     }
                 }
             } else {
-                // Robustness Guarantee: Natural language output is treated as a conversational response, NEVER a parsing failure!
                 Log.i(TAG_BRAIN, "ACE_BRAIN: Model emitted natural language response: \"$trimmed\"")
                 AgentDecision.ConversationalResponse(trimmed)
             }
