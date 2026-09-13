@@ -256,4 +256,46 @@ class AutonomousAgentArchitectureTest {
         assertNotNull(postcondition.summary)
         assertTrue(postcondition.targetEntities.contains("Check account status"))
     }
+
+    // 16. Production autonomous cognition resolves strictly to local Gemma.
+    @Test
+    fun testProductionCognitionResolvesStrictlyToLocalGemma() {
+        val context = AgentTaskContext(userGoal = "Local reasoning test")
+        val obs = ScreenObservation(packageName = "com.test", appName = "TestApp", visibleText = listOf("Header"), screenState = "Interactive")
+        
+        val mockLocalBrain = object : com.ace.app.brain.LocalBrain {
+            override val backendType = ReasoningBackend.LOCAL_GEMMA
+            override suspend fun initialize(context: android.content.Context, handle: com.ace.app.brain.ModelHandle): com.ace.app.brain.BrainResult = com.ace.app.brain.BrainResult.Cancelled
+            override suspend fun generate(goal: String, contextInput: String, generationId: Long): com.ace.app.brain.BrainResult = com.ace.app.brain.BrainResult.Cancelled
+            override suspend fun cancel() {}
+            override fun getBrainState(): com.ace.app.brain.BrainState = com.ace.app.brain.BrainState.READY
+            override fun close() {}
+            override fun isReady(): Boolean = true
+            override suspend fun reasonNextDecision(goal: String, observation: ScreenObservation, context: AgentTaskContext, generationId: Long): AgentDecision {
+                return AgentDecision.Action(primitive = "CLICK", target = "Header")
+            }
+        }
+
+        val brain = BrainRouter.selectBrain("Local reasoning test", obs, context, mockLocalBrain)
+        assertEquals("Production router must resolve to LOCAL_GEMMA", ReasoningBackend.LOCAL_GEMMA, brain.backendType)
+        assertTrue("Selected local brain must be ready", brain.isReady())
+    }
+
+    // 17. Missing perception is explicitly represented as missing and cannot verify postcondition.
+    @Test
+    fun testMissingPerceptionCannotVerifySuccess() {
+        val postcondition = ExpectedPostcondition(summary = "Search result", targetEntities = listOf("Result A"))
+        val context = AgentTaskContext(userGoal = "Find Result A", expectedPostcondition = postcondition)
+        val unobservedScreen = ScreenObservation(
+            packageName = "android",
+            appName = "System",
+            visibleText = emptyList(),
+            screenState = "PERCEPTION_UNAVAILABLE",
+            isPerceptionAvailable = false
+        )
+        val outcome = IndependentGoalVerifier.verifyGoal(context, unobservedScreen, null)
+        assertFalse("Unobserved perception must not verify success", outcome.isVerified)
+        assertEquals(TaskStatus.NOT_VERIFIED, outcome.status)
+        assertTrue(outcome.evidence.contains("unavailable"))
+    }
 }

@@ -140,23 +140,28 @@ object ScreenObservationEngine {
         val clickables = observation.clickableElements.mapNotNull {
             val label = (it.text.ifBlank { it.contentDescription }).trim()
             if (label.isNotBlank()) label else null
-        }.distinct().take(8)
+        }.distinct().take(12)
 
         val editables = observation.editableElements.mapNotNull {
             val label = (it.text.ifBlank { it.contentDescription }).trim()
             if (label.isNotBlank()) label else null
+        }.distinct().take(6)
+
+        val scrollables = observation.scrollableElements.mapNotNull {
+            val label = (it.text.ifBlank { it.contentDescription }).trim()
+            if (label.isNotBlank()) label else null
         }.distinct().take(4)
 
-        val texts = observation.visibleText.filter { it.isNotBlank() }.distinct().take(10)
+        val texts = observation.visibleText.filter { it.isNotBlank() }.distinct().take(15)
 
         return buildString {
-            append("CURRENT_APP: ${observation.appName.ifBlank { observation.packageName }}\n")
-            append("USER_GOAL: $userGoal\n")
+            append("APP: ${observation.appName.ifBlank { observation.packageName }}\n")
+            append("SCREEN_STATE: ${observation.screenState}\n")
             append("PERCEPTION_AVAILABLE: ${observation.isPerceptionAvailable}\n")
-            append("EDITABLE: $editables\n")
-            append("CLICKABLE: $clickables\n")
-            append("VISIBLE_TEXT: $texts\n")
-            append("Return compact JSON: {\"action\":\"<CLICK|TYPE|SCROLL|SUBMIT>\",\"target\":\"<element_text>\",\"text\":\"<input_text>\"}")
+            if (editables.isNotEmpty()) append("EDITABLE_FIELDS: $editables\n")
+            if (clickables.isNotEmpty()) append("CLICKABLE_ELEMENTS: $clickables\n")
+            if (scrollables.isNotEmpty()) append("SCROLLABLE_CONTAINERS: $scrollables\n")
+            if (texts.isNotEmpty()) append("VISIBLE_TEXT_NODES: $texts\n")
         }
     }
 

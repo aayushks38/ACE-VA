@@ -402,16 +402,24 @@ class GemmaLocalBrain : LocalBrain {
 
         val compactUi = ScreenObservationEngine.formatCompactUiRepresentation(cleanGoal, observation)
         val postconditionSummary = context.expectedPostcondition.summary.ifBlank { cleanGoal }
+        val historyStr = context.actionHistory.takeLast(4).joinToString("; ")
+        val blockersStr = context.blockers.joinToString("; ")
         val prompt = buildString {
             append("<start_of_turn>user\n")
             append("You are ACE, an autonomous computer-use agent for Android.\n")
             append("Goal: $cleanGoal\n")
             append("Expected Outcome: $postconditionSummary\n")
-            append("Current Observation:\n$compactUi\n")
+            if (context.expectedPostcondition.targetEntities.isNotEmpty()) {
+                append("Target Entities: ${context.expectedPostcondition.targetEntities}\n")
+            }
+            if (historyStr.isNotBlank()) append("Previous Actions: $historyStr\n")
+            if (blockersStr.isNotBlank()) append("Blockers: $blockersStr\n")
+            append("Observation:\n$compactUi\n")
             append("Choose SINGLE next decision. Return compact JSON:\n")
             append("If underspecified: {\"status\":\"CLARIFY\",\"question\":\"<question>\"}\n")
             append("If goal achieved: {\"status\":\"DONE\",\"reason\":\"<evidence>\"}\n")
-            append("If action needed: {\"status\":\"CONTINUE\",\"action\":\"<ui_click|ui_type|ui_scroll|web_open_url|ui_open_app>\",\"target\":\"<element>\",\"text\":\"<input_text>\"}\n")
+            append("If replan needed: {\"status\":\"REPLAN\",\"updatedGoal\":\"<new_goal>\",\"reason\":\"<reason>\"}\n")
+            append("If action needed: {\"status\":\"CONTINUE\",\"action\":\"<OPEN_APP|OPEN_URL|CLICK|LONG_CLICK|TYPE|CLEAR_TEXT|SCROLL|SWIPE|BACK|WAIT|SEARCH|SELECT|SUBMIT|SEND|SHARE|ATTACH|DOWNLOAD|UPLOAD|COPY|PASTE|PHONE_CALL|PLAY_MEDIA|CREATE_ALARM|CREATE_TIMER|TOGGLE_SYSTEM_FEATURE>\",\"target\":\"<element>\",\"text\":\"<input_text>\"}\n")
             append("<end_of_turn>\n<start_of_turn>model\n{")
         }
 
