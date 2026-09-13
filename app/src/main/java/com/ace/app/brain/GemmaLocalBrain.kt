@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicReference
  *  2. NO fake keyword matching, pattern fallback, or hardcoded plan generators replacing LLM reasoning.
  *  3. BrainState.READY is granted ONLY after the native model loads AND passes a real token generation smoke test.
  *  4. Strict state machine: UNINITIALIZED -> MODEL_VALIDATING -> MODEL_LOADING -> MODEL_LOADED -> INFERENCE_TESTING -> READY.
- *  5. Structured model outputs parsed directly into validated AgentPlan execution graphs.
+ *  5. Structured model outputs parsed directly into native AgentDecision decisions.
  */
 class GemmaLocalBrain : LocalBrain {
 
