@@ -47,7 +47,7 @@ object IndependentGoalVerifier {
         return evaluateSemanticPostcondition(taskContext.userGoal, taskContext.expectedPostcondition, evidence)
     }
 
-    private fun evaluateSemanticPostcondition(
+    fun evaluateSemanticPostcondition(
         userGoal: String,
         postcondition: ExpectedPostcondition,
         evidence: EnvironmentEvidence
@@ -79,62 +79,48 @@ object IndependentGoalVerifier {
         val desiredInformation = postcondition.desiredInformation.lowercase().trim()
         val desiredState = postcondition.desiredState.lowercase().trim()
 
-        // 2. Multi-condition & Entity Evidence Check against Model-Derived Success Conditions
+        var entitiesVerified = true
         if (targetEntities.isNotEmpty()) {
-            val allEntitiesVerified = targetEntities.all { entity ->
+            entitiesVerified = targetEntities.all { entity ->
                 val entityLower = entity.lowercase().trim()
                 visibleTextSet.any { text -> text.contains(entityLower) } ||
                 evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(entityLower) }
             }
+        }
 
-            if (allEntitiesVerified) {
-                return IndependentVerificationOutcome(
-                    isVerified = true,
-                    status = TaskStatus.COMPLETED,
-                    evidence = "Empirical verification satisfied: all postcondition target entities (${targetEntities.joinToString()}) confirmed in current environment observation (${obs.appName}).",
-                    summary = "Goal outcome verified in current environment state."
-                )
-            }
-        } else if (successConditions.isNotEmpty()) {
-            val allConditionsVerified = successConditions.all { cond ->
+        var conditionsVerified = true
+        if (successConditions.isNotEmpty()) {
+            conditionsVerified = successConditions.all { cond ->
                 val condLower = cond.lowercase().trim()
                 visibleTextSet.any { text -> text.contains(condLower) } ||
                 evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(condLower) }
             }
-
-            if (allConditionsVerified) {
-                return IndependentVerificationOutcome(
-                    isVerified = true,
-                    status = TaskStatus.COMPLETED,
-                    evidence = "Empirical verification satisfied: model success conditions verified in current observation (${obs.appName}).",
-                    summary = "Goal success conditions satisfied."
-                )
-            }
-        } else if (desiredInformation.isNotBlank()) {
-            val infoMatched = visibleTextSet.any { text -> text.contains(desiredInformation) || desiredInformation.contains(text) } ||
-                    evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(desiredInformation) }
-            if (infoMatched) {
-                return IndependentVerificationOutcome(
-                    isVerified = true,
-                    status = TaskStatus.COMPLETED,
-                    evidence = "Empirical informational verification satisfied: extracted evidence matches desired information in environment state.",
-                    summary = "Informational goal outcome verified."
-                )
-            }
-        } else if (desiredState.isNotBlank()) {
-            val stateMatched = visibleTextSet.any { text -> text.contains(desiredState) || desiredState.contains(text) } ||
-                    evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(desiredState) }
-            if (stateMatched) {
-                return IndependentVerificationOutcome(
-                    isVerified = true,
-                    status = TaskStatus.COMPLETED,
-                    evidence = "Empirical state modification satisfied in current environment observation (${obs.appName}).",
-                    summary = "State modification goal outcome verified."
-                )
-            }
         }
 
-        // 3. Execution != Success. Return NOT_VERIFIED if empirical evidence is insufficient
+        var infoVerified = true
+        if (desiredInformation.isNotBlank()) {
+            infoVerified = visibleTextSet.any { text -> text.contains(desiredInformation) || desiredInformation.contains(text) } ||
+                    evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(desiredInformation) }
+        }
+
+        var stateVerified = true
+        if (desiredState.isNotBlank()) {
+            stateVerified = visibleTextSet.any { text -> text.contains(desiredState) || desiredState.contains(text) } ||
+                    evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(desiredState) }
+        }
+
+        val hasAnyCondition = targetEntities.isNotEmpty() || successConditions.isNotEmpty() || desiredInformation.isNotBlank() || desiredState.isNotBlank()
+
+        if (hasAnyCondition && entitiesVerified && conditionsVerified && infoVerified && stateVerified) {
+            return IndependentVerificationOutcome(
+                isVerified = true,
+                status = TaskStatus.COMPLETED,
+                evidence = "Empirical verification satisfied: all postcondition requirements confirmed in current environment state (${obs.appName}).",
+                summary = "Goal outcome verified in current environment state."
+            )
+        }
+
+        // Execution != Success. Return NOT_VERIFIED if empirical evidence is insufficient
         val actionCount = evidence.actionHistory.size
         return IndependentVerificationOutcome(
             isVerified = false,

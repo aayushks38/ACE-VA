@@ -449,6 +449,12 @@ class GemmaLocalBrain : LocalBrain {
                     status == "DONE" || status == "COMPLETE" || status == "VERIFIED" -> {
                         AgentDecision.Complete(json.optString("reason", "Goal satisfied"))
                     }
+                    status == "REPLAN" -> {
+                        AgentDecision.Replan(
+                            updatedGoal = json.optString("updatedGoal", goal),
+                            reason = json.optString("reason", "")
+                        )
+                    }
                     else -> {
                         val act = json.optString("action", json.optString("primitive", "ui_click"))
                         val tgt = json.optString("target", json.optString("element", ""))
@@ -465,6 +471,65 @@ class GemmaLocalBrain : LocalBrain {
             Log.i(TAG_BRAIN, "ACE_BRAIN: Robust fallback converting output to conversational response: \"$trimmed\"")
             AgentDecision.ConversationalResponse(trimmed)
         }
+    }
+
+    override suspend fun verifyPostcondition(
+        goal: String,
+        observation: ScreenObservation,
+        context: com.ace.app.agent.AgentTaskContext
+    ): com.ace.app.agent.IndependentVerificationOutcome = withContext(Dispatchers.IO) {
+        val empirical = com.ace.app.agent.IndependentGoalVerifier.evaluateSemanticPostcondition(
+            goal,
+            context.expectedPostcondition,
+            com.ace.app.agent.EnvironmentEvidence(
+                screenObservation = observation,
+                capturedEvidenceMap = context.capturedEvidence,
+                actionHistory = context.actionHistory,
+                blockers = context.blockers,
+                brainHypothesis = context.capturedEvidence["brain_completion_hypothesis"]
+            )
+        )
+
+        if (empirical.isVerified) return@withContext empirical
+        if (llamaBridge == null || !isReady()) return@withContext empirical
+
+        val compactUi = ScreenObservationEngine.formatCompactUiRepresentation(goal, observation)
+        val prompt = buildString {
+            append("<start_of_turn>user\n")
+            append("Verify if current observation satisfies goal postcondition:\n")
+            append("Goal: $goal\n")
+            append("Postcondition: ${context.expectedPostcondition.summary}\n")
+            append("Observation:\n$compactUi\n")
+            append("Return compact JSON: {\"isVerified\":true|false,\"reason\":\"<explanation>\"}\n")
+            append("<end_of_turn>\n<start_of_turn>model\n{")
+        }
+
+        val rawOutput = try {
+            llamaBridge?.generate(prompt, maxTokens = 64) ?: ""
+        } catch (_: Exception) { "" }
+
+        if (rawOutput.isNotBlank() && observation.isPerceptionAvailable) {
+            try {
+                val candidate = if (!rawOutput.trim().startsWith("{")) "{" + rawOutput.trim() else rawOutput.trim()
+                val sStart = candidate.indexOf('{')
+                val sEnd = candidate.lastIndexOf('}')
+                if (sStart != -1 && sEnd > sStart) {
+                    val json = JSONObject(candidate.substring(sStart, sEnd + 1))
+                    val isVerified = json.optBoolean("isVerified", false)
+                    val reason = json.optString("reason", "Model verified postcondition")
+                    if (isVerified) {
+                        return@withContext com.ace.app.agent.IndependentVerificationOutcome(
+                            isVerified = true,
+                            status = com.ace.app.agent.TaskStatus.COMPLETED,
+                            evidence = "Model-grounded semantic verification satisfied: $reason",
+                            summary = reason
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        return@withContext empirical
     }
 
     /**

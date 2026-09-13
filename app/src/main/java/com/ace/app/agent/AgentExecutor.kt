@@ -141,8 +141,9 @@ class AgentExecutor(private val context: Context?) {
                     Log.i("ACE_REASON", "ACE_REASON: Brain proposed COMPLETE hypothesis=\"${decision.evidence}\"")
                     taskContext.capturedEvidence["brain_completion_hypothesis"] = decision.evidence
 
-                    // INDEPENDENT POSTCONDITION VERIFICATION
-                    val verificationOutcome = IndependentGoalVerifier.verifyGoal(taskContext, obs, context)
+                    // INDEPENDENT & MODEL-GROUNDED POSTCONDITION VERIFICATION
+                    val brain = com.ace.app.brain.BrainRouter.selectBrain(taskContext.userGoal, obs, taskContext, localBrain, cloudBrain)
+                    val verificationOutcome = brain.verifyPostcondition(taskContext.userGoal, obs, taskContext)
                     Log.i("ACE_VERIFY", "ACE_VERIFY: Postcondition verification result isVerified=${verificationOutcome.isVerified} status=${verificationOutcome.status} summary=${verificationOutcome.summary}")
 
                     if (verificationOutcome.isVerified && verificationOutcome.status == TaskStatus.COMPLETED) {
@@ -219,9 +220,9 @@ class AgentExecutor(private val context: Context?) {
                 }
 
                 is com.ace.app.brain.AgentDecision.Replan -> {
-                    Log.i("ACE_REASON", "ACE_REASON: Replan requested updatedGoal=\"${decision.updatedGoal}\"")
+                    Log.i("ACE_REASON", "ACE_REASON: Replan requested updatedGoal=\"${decision.updatedGoal}\" reason=\"${decision.reason}\"")
                     taskContext.userGoal = decision.updatedGoal
-                    taskContext.expectedPostcondition = GoalUnderstandingEngine.derivePostcondition(decision.updatedGoal)
+                    taskContext.expectedPostcondition = decision.updatedPostcondition ?: GoalUnderstandingEngine.derivePostcondition(decision.updatedGoal)
                     taskContext.actionHistory.add("Replan: Goal updated to '${decision.updatedGoal}'")
                     lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
                 }

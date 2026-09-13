@@ -26,7 +26,11 @@ sealed class AgentDecision {
         val params: Map<String, String> = emptyMap()
     ) : AgentDecision()
     data class Wait(val durationMs: Long = 1000) : AgentDecision()
-    data class Replan(val updatedGoal: String) : AgentDecision()
+    data class Replan(
+        val updatedGoal: String,
+        val updatedPostcondition: com.ace.app.agent.ExpectedPostcondition? = null,
+        val reason: String = ""
+    ) : AgentDecision()
     data class Blocked(val reason: String, val userActionRequired: Boolean = true) : AgentDecision()
     data class Complete(val evidence: String) : AgentDecision()
 }
@@ -53,6 +57,24 @@ interface ReasoningBrain {
         context: AgentTaskContext,
         generationId: Long = 0L
     ): AgentDecision
+
+    suspend fun verifyPostcondition(
+        goal: String,
+        observation: ScreenObservation,
+        context: AgentTaskContext
+    ): com.ace.app.agent.IndependentVerificationOutcome {
+        return com.ace.app.agent.IndependentGoalVerifier.evaluateSemanticPostcondition(
+            goal,
+            context.expectedPostcondition,
+            com.ace.app.agent.EnvironmentEvidence(
+                screenObservation = observation,
+                capturedEvidenceMap = context.capturedEvidence,
+                actionHistory = context.actionHistory,
+                blockers = context.blockers,
+                brainHypothesis = context.capturedEvidence["brain_completion_hypothesis"]
+            )
+        )
+    }
 
     fun isReady(): Boolean
 }

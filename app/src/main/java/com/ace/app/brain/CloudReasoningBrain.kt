@@ -205,7 +205,10 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
                         AgentDecision.Complete(parsedObj.optString("reason", "Goal satisfied"))
                     }
                     status == "REPLAN" -> {
-                        AgentDecision.Replan(parsedObj.optString("updatedGoal", goal))
+                        AgentDecision.Replan(
+                            updatedGoal = parsedObj.optString("updatedGoal", goal),
+                            reason = parsedObj.optString("reason", "")
+                        )
                     }
                     status == "BLOCKED" -> {
                         AgentDecision.Blocked(parsedObj.optString("reason", "Action blocked"))
@@ -225,5 +228,86 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
             Log.e(TAG, "ACE_CLOUD_BRAIN: Exception during cloud reasoning call: ${e.message}")
             AgentDecision.Blocked("Cloud reasoning execution error: ${e.message}")
         }
+    }
+
+    override suspend fun verifyPostcondition(
+        goal: String,
+        observation: ScreenObservation,
+        context: AgentTaskContext
+    ): com.ace.app.agent.IndependentVerificationOutcome = withContext(Dispatchers.IO) {
+        val empirical = com.ace.app.agent.IndependentGoalVerifier.evaluateSemanticPostcondition(
+            goal,
+            context.expectedPostcondition,
+            com.ace.app.agent.EnvironmentEvidence(
+                screenObservation = observation,
+                capturedEvidenceMap = context.capturedEvidence,
+                actionHistory = context.actionHistory,
+                blockers = context.blockers,
+                brainHypothesis = context.capturedEvidence["brain_completion_hypothesis"]
+            )
+        )
+
+        if (empirical.isVerified) return@withContext empirical
+
+        if (!isReady()) return@withContext empirical
+
+        val prefs = this@CloudReasoningBrain.context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val endpoint = prefs.getString(KEY_ENDPOINT, "https://api.openai.com/v1/chat/completions") ?: "https://api.openai.com/v1/chat/completions"
+        val apiKey = prefs.getString(KEY_API_KEY, "") ?: ""
+        val modelName = prefs.getString(KEY_MODEL, "gpt-4o-mini") ?: "gpt-4o-mini"
+
+        val jsonPayload = JSONObject().apply {
+            put("model", modelName)
+            put("messages", org.json.JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", "You are the model-grounded postcondition verifier for ACE. Evaluate if current observation and evidence prove that expected goal postcondition is satisfied. Return JSON: {\"isVerified\":true|false,\"summary\":\"<explanation>\"}")
+                })
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", "Goal: $goal\nExpected Outcome: ${context.expectedPostcondition.summary}\nTarget Entities: ${context.expectedPostcondition.targetEntities}\nSuccess Conditions: ${context.expectedPostcondition.successConditions}\nDesired Info: ${context.expectedPostcondition.desiredInformation}\nDesired State: ${context.expectedPostcondition.desiredState}\nApp: ${observation.appName} (${observation.packageName})\nPerception Available: ${observation.isPerceptionAvailable}\nVisible Text: ${observation.visibleText.take(15)}\nCaptured Evidence: ${context.capturedEvidence}")
+                })
+            })
+            put("temperature", 0.0)
+        }
+
+        try {
+            val body = jsonPayload.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .post(body)
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val responseBodyStr = response.body?.string() ?: ""
+
+            if (response.isSuccessful && responseBodyStr.isNotBlank()) {
+                val jsonRes = JSONObject(responseBodyStr)
+                val choices = jsonRes.optJSONArray("choices")
+                val contentStr = choices?.optJSONObject(0)?.optJSONObject("message")?.optString("content", "") ?: ""
+
+                val rawTrimmed = contentStr.trim()
+                val sStart = rawTrimmed.indexOf('{')
+                val sEnd = rawTrimmed.lastIndexOf('}')
+                if (sStart != -1 && sEnd > sStart) {
+                    val parsedObj = JSONObject(rawTrimmed.substring(sStart, sEnd + 1))
+                    val verified = parsedObj.optBoolean("isVerified", false)
+                    val summaryStr = parsedObj.optString("summary", "Model verified postcondition")
+                    if (verified && observation.isPerceptionAvailable) {
+                        return@withContext com.ace.app.agent.IndependentVerificationOutcome(
+                            isVerified = true,
+                            status = com.ace.app.agent.TaskStatus.COMPLETED,
+                            evidence = "Model-grounded semantic verification satisfied: $summaryStr",
+                            summary = summaryStr
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "ACE_CLOUD_BRAIN: verifyPostcondition error: ${e.message}")
+        }
+
+        return@withContext empirical
     }
 }
