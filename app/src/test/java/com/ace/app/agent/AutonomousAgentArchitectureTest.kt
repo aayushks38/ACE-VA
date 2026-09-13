@@ -353,4 +353,43 @@ class AutonomousAgentArchitectureTest {
 
         assertTrue("Underspecified goal must route to DeepBrain for Gemma clarification", route is CommandRoute.DeepBrain)
     }
+
+    // 22. Valid Gemma JSON output is parsed into GoalInterpretation cleanly.
+    @Test
+    fun testValidGemmaJsonParsing() {
+        val brain = com.ace.app.brain.GemmaLocalBrain()
+        val rawJson = """{"objectiveType":"INFORMATION_RETRIEVAL","requestedOutcome":"Find admissions","targetEntities":["Ketam University"],"desiredInformation":"Admission requirements","clarificationRequired":false}"""
+        val parsed = brain.extractJsonObject(rawJson)
+        assertNotNull("Valid JSON must be extracted", parsed)
+        assertEquals("INFORMATION_RETRIEVAL", parsed?.objectiveType)
+        assertEquals("Find admissions", parsed?.requestedOutcome)
+    }
+
+    // 23. Fenced valid JSON block is stripped and extracted cleanly.
+    @Test
+    fun testFencedJsonParsing() {
+        val brain = com.ace.app.brain.GemmaLocalBrain()
+        val fencedJson = """
+            ```json
+            {
+              "objectiveType": "STATE_MODIFICATION",
+              "requestedOutcome": "Turn on flashlight",
+              "targetEntities": ["Flashlight"],
+              "clarificationRequired": false
+            }
+            ```
+        """.trimIndent()
+        val parsed = brain.extractJsonObject(fencedJson)
+        assertNotNull("Fenced JSON block must be extracted", parsed)
+        assertEquals("STATE_MODIFICATION", parsed?.objectiveType)
+    }
+
+    // 24. Malformed/unparseable model output returns null and does NOT fallback to keyword match.
+    @Test
+    fun testMalformedOutputReturnsNullWithoutKeywordFallback() {
+        val brain = com.ace.app.brain.GemmaLocalBrain()
+        val malformed = "I am an AI assistant. I will find what requirements and documents you need."
+        val parsed = brain.extractJsonObject(malformed)
+        assertNull("Plain text output without JSON structure must return null without keyword fallback", parsed)
+    }
 }

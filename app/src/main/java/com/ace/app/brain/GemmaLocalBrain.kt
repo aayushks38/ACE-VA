@@ -260,74 +260,168 @@ class GemmaLocalBrain : LocalBrain {
 
         val prompt = buildString {
             append("<start_of_turn>user\n")
-            append("You are ACE, an autonomous computer-use cognitive agent. Analyze user goal semantically:\n")
+            append("You are ACE, an autonomous computer-use cognitive agent for Android. Analyze the user goal semantically.\n")
             append("Goal: $cleanGoal\n")
-            append("Return compact JSON object:\n")
-            append("{\"objectiveType\":\"INFORMATION_RETRIEVAL|STATE_MODIFICATION|GENERAL\",\"requestedOutcome\":\"<outcome>\",\"targetEntities\":[\"<entity>\"],\"desiredState\":\"<state>\",\"desiredInformation\":\"<info>\",\"clarificationRequired\":false,\"clarificationQuestion\":null}\n")
-            append("<end_of_turn>\n<start_of_turn>model\n{")
+            append("Return ONLY a valid JSON object matching this schema:\n")
+            append("{\n")
+            append("  \"objectiveType\": \"INFORMATION_RETRIEVAL\"|\"STATE_MODIFICATION\"|\"GENERAL\",\n")
+            append("  \"requestedOutcome\": \"<outcome summary>\",\n")
+            append("  \"targetEntities\": [\"<entity1>\", \"<entity2>\"],\n")
+            append("  \"desiredState\": \"<desired final state>\",\n")
+            append("  \"desiredInformation\": \"<desired information>\",\n")
+            append("  \"clarificationRequired\": true|false,\n")
+            append("  \"clarificationQuestion\": \"<question if ambiguous, else null>\"\n")
+            append("}\n")
+            append("<end_of_turn>\n")
+            append("<start_of_turn>model\n")
         }
 
+        Log.i(TAG_BRAIN, "ACE_BRAIN: PROMPT_LENGTH=${prompt.length}")
+        Log.i(TAG_BRAIN, "ACE_BRAIN: MODEL_GENERATION_START BRAIN_INSTANCE_ID=$instanceId maxTokens=256")
+        val genStart = System.currentTimeMillis()
+
         val rawOutput = try {
-            llamaBridge?.generate(prompt, maxTokens = 64) ?: ""
+            llamaBridge?.generate(prompt, maxTokens = 256) ?: ""
         } catch (e: Exception) {
-            Log.w(TAG_BRAIN, "ACE_BRAIN: llamaBridge generate exception during interpretGoal: ${e.message}")
+            Log.e(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_FAILURE BRAIN_INSTANCE_ID=$instanceId reason=\"LlamaBridge generate exception: ${e.message}\"", e)
             ""
         }
 
-        if (rawOutput.isNotBlank()) {
-            try {
-                val candidate = if (!rawOutput.trim().startsWith("{")) "{" + rawOutput.trim() else rawOutput.trim()
-                val sStart = candidate.indexOf('{')
-                val sEnd = candidate.lastIndexOf('}')
-                if (sStart != -1 && sEnd > sStart) {
-                    val json = JSONObject(candidate.substring(sStart, sEnd + 1))
-                    val typeStr = json.optString("objectiveType", "GENERAL")
-                    val isAmbig = json.optBoolean("clarificationRequired", json.optBoolean("isAmbiguous", false))
-                    val q = if (isAmbig) json.optString("clarificationQuestion", "Could you clarify your goal?") else null
-                    val entities = mutableListOf<String>()
-                    val arr = json.optJSONArray("targetEntities")
-                    if (arr != null) {
-                        for (i in 0 until arr.length()) entities.add(arr.optString(i))
-                    }
-                    val result = GoalInterpretation(
-                        rawGoal = cleanGoal,
-                        objectiveType = typeStr,
-                        requestedOutcome = json.optString("requestedOutcome", cleanGoal),
-                        targetEntities = entities,
-                        desiredFinalState = json.optString("desiredState", ""),
-                        desiredInformation = json.optString("desiredInformation", ""),
-                        clarificationRequired = isAmbig,
-                        clarificationQuestion = q
-                    )
-                    Log.i(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_RESULT BRAIN_INSTANCE_ID=$instanceId objectiveType=${result.objectiveType} isAmbiguous=${result.clarificationRequired}")
-                    return@withContext result
-                }
-            } catch (e: Exception) {
-                Log.w(TAG_BRAIN, "ACE_BRAIN: Goal JSON parsing exception: ${e.message}")
-            }
+        val genDurationMs = System.currentTimeMillis() - genStart
+        Log.i(TAG_BRAIN, "ACE_BRAIN: MODEL_GENERATION_END BRAIN_INSTANCE_ID=$instanceId duration_ms=$genDurationMs RAW_OUTPUT_LENGTH=${rawOutput.length}")
+        val preview = rawOutput.take(120).replace("\n", " ")
+        Log.i(TAG_BRAIN, "ACE_BRAIN: RAW_OUTPUT_PREVIEW=\"$preview\"")
+
+        val jsonObj = extractJsonObject(rawOutput)
+        if (jsonObj != null) {
+            Log.i(TAG_BRAIN, "ACE_BRAIN: JSON_EXTRACTION_RESULT=SUCCESS")
+            val result = GoalInterpretation(
+                rawGoal = cleanGoal,
+                objectiveType = jsonObj.objectiveType,
+                requestedOutcome = jsonObj.requestedOutcome.ifBlank { cleanGoal },
+                targetEntities = jsonObj.targetEntities,
+                desiredFinalState = jsonObj.desiredState,
+                desiredInformation = jsonObj.desiredInformation,
+                clarificationRequired = jsonObj.clarificationRequired,
+                clarificationQuestion = jsonObj.clarificationQuestion
+            )
+            Log.i(TAG_BRAIN, "ACE_BRAIN: JSON_PARSE_RESULT=SUCCESS")
+            Log.i(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_RESULT BRAIN_INSTANCE_ID=$instanceId objectiveType=${result.objectiveType} isAmbiguous=${result.clarificationRequired}")
+            return@withContext result
+        } else {
+            Log.e(TAG_BRAIN, "ACE_BRAIN: JSON_EXTRACTION_RESULT=FAILED")
         }
 
-        // When local brain runtime is READY, fallback to active model-grounded objective rather than falsely declaring backend unavailable
-        val isInfoRequest = cleanGoal.contains("what", ignoreCase = true) ||
-                cleanGoal.contains("find", ignoreCase = true) ||
-                cleanGoal.contains("how", ignoreCase = true) ||
-                cleanGoal.contains("where", ignoreCase = true) ||
-                cleanGoal.contains("tell", ignoreCase = true) ||
-                cleanGoal.contains("requirement", ignoreCase = true) ||
-                cleanGoal.contains("document", ignoreCase = true)
-
-        val fallbackResult = GoalInterpretation(
+        Log.e(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_FAILURE BRAIN_INSTANCE_ID=$instanceId reason=\"Model output could not be parsed as valid JSON\"")
+        return@withContext GoalInterpretation(
             rawGoal = cleanGoal,
-            objectiveType = if (isInfoRequest) "INFORMATION_RETRIEVAL" else "GENERAL",
-            requestedOutcome = cleanGoal,
-            targetEntities = listOf(cleanGoal),
-            desiredFinalState = "",
-            desiredInformation = if (isInfoRequest) cleanGoal else "",
-            clarificationRequired = false,
-            clarificationQuestion = null
+            objectiveType = "INTERPRETATION_PARSE_FAILED",
+            requestedOutcome = "Goal interpretation model output unparseable"
         )
-        Log.i(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_RESULT BRAIN_INSTANCE_ID=$instanceId fallback_objectiveType=${fallbackResult.objectiveType}")
-        return@withContext fallbackResult
+    }
+
+    /** Helper data structure for model goal interpretation. */
+    data class ParsedGoalJson(
+        val objectiveType: String = "GENERAL",
+        val requestedOutcome: String = "",
+        val targetEntities: List<String> = emptyList(),
+        val desiredState: String = "",
+        val desiredInformation: String = "",
+        val clarificationRequired: Boolean = false,
+        val clarificationQuestion: String? = null
+    )
+
+    /** Helper function to robustly extract a ParsedGoalJson from model output text. */
+    fun extractJsonObject(rawOutput: String): ParsedGoalJson? {
+        if (rawOutput.isBlank()) return null
+        val trimmed = rawOutput.trim()
+
+        // 1. Strip markdown code fences if present (e.g. ```json ... ``` or ``` ...)
+        val cleanText = trimmed
+            .replace(Regex("""^```[a-zA-Z]*\s*"""), "")
+            .replace(Regex("""\s*```$"""), "")
+            .trim()
+
+        // 2. Extract substring between first '{' and last '}'
+        val firstBrace = cleanText.indexOf('{')
+        val lastBrace = cleanText.lastIndexOf('}')
+
+        val candidate = if (firstBrace != -1 && lastBrace > firstBrace) {
+            cleanText.substring(firstBrace, lastBrace + 1)
+        } else if (firstBrace != -1) {
+            val partial = cleanText.substring(firstBrace)
+            if (partial.endsWith("\"")) "$partial}" else "$partial\"}"
+        } else {
+            cleanText
+        }
+
+        if (!candidate.contains("\"") && !candidate.contains(":")) return null
+
+        // Try Android org.json.JSONObject first
+        try {
+            val json = JSONObject(candidate)
+            val typeStr = json.optString("objectiveType", "GENERAL").uppercase()
+            val isAmbig = json.optBoolean("clarificationRequired", json.optBoolean("isAmbiguous", false))
+            val q = if (isAmbig) json.optString("clarificationQuestion", "Could you please specify your goal in more detail?") else null
+            val entities = mutableListOf<String>()
+            val arr = json.optJSONArray("targetEntities")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val ent = arr.optString(i)
+                    if (ent.isNotBlank()) entities.add(ent)
+                }
+            }
+            return ParsedGoalJson(
+                objectiveType = typeStr,
+                requestedOutcome = json.optString("requestedOutcome", ""),
+                targetEntities = entities,
+                desiredState = json.optString("desiredState", ""),
+                desiredInformation = json.optString("desiredInformation", ""),
+                clarificationRequired = isAmbig,
+                clarificationQuestion = q
+            )
+        } catch (_: Throwable) {
+            // Fallback for JVM unit tests where org.json is stubbed
+            return parseGoalJsonWithRegex(candidate)
+        }
+    }
+
+    private fun parseGoalJsonWithRegex(text: String): ParsedGoalJson? {
+        try {
+            val typeMatch = Regex("""\"objectiveType\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
+            val outcomeMatch = Regex("""\"requestedOutcome\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
+            val stateMatch = Regex("""\"desiredState\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
+            val infoMatch = Regex("""\"desiredInformation\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
+            val ambigMatch = Regex("""\"clarificationRequired\"\s*:\s*(true|false)""", RegexOption.IGNORE_CASE).find(text)
+            val questionMatch = Regex("""\"clarificationQuestion\"\s*:\s*\"([^\"]+)\"""", RegexOption.IGNORE_CASE).find(text)
+
+            val entities = mutableListOf<String>()
+            val arrMatch = Regex("""\"targetEntities\"\s*:\s*\[([^\]]+)\]""", RegexOption.IGNORE_CASE).find(text)
+            if (arrMatch != null) {
+                val rawArr = arrMatch.groupValues[1]
+                Regex("""\"([^\"]+)\"""").findAll(rawArr).forEach { m ->
+                    entities.add(m.groupValues[1])
+                }
+            }
+
+            if (typeMatch == null && outcomeMatch == null && ambigMatch == null) return null
+
+            val objType = typeMatch?.groupValues?.get(1)?.uppercase() ?: "GENERAL"
+            val isAmbig = ambigMatch?.groupValues?.get(1)?.lowercase() == "true"
+            val q = if (isAmbig) questionMatch?.groupValues?.get(1) ?: "Could you please clarify your goal?" else null
+
+            return ParsedGoalJson(
+                objectiveType = objType,
+                requestedOutcome = outcomeMatch?.groupValues?.get(1) ?: "",
+                targetEntities = entities,
+                desiredState = stateMatch?.groupValues?.get(1) ?: "",
+                desiredInformation = infoMatch?.groupValues?.get(1) ?: "",
+                clarificationRequired = isAmbig,
+                clarificationQuestion = q
+            )
+        } catch (_: Throwable) {
+            return null
+        }
     }
 
     override suspend fun reasonNextDecision(
