@@ -74,14 +74,13 @@ object IndependentGoalVerifier {
         }
 
         val visibleTextSet = obs.visibleText.map { it.lowercase().trim() }.toSet()
-
-        // 2. Strict Semantic Postcondition Evaluation: Multi-condition & Entity Evidence Check
         val targetEntities = postcondition.targetEntities.filter { it.isNotBlank() }
+        val successConditions = postcondition.successConditions.filter { it.isNotBlank() }
         val desiredInformation = postcondition.desiredInformation.lowercase().trim()
         val desiredState = postcondition.desiredState.lowercase().trim()
 
+        // 2. Multi-condition & Entity Evidence Check against Model-Derived Success Conditions
         if (targetEntities.isNotEmpty()) {
-            // Verify that ALL required target entities/conditions are empirically established in current environment
             val allEntitiesVerified = targetEntities.all { entity ->
                 val entityLower = entity.lowercase().trim()
                 visibleTextSet.any { text -> text.contains(entityLower) } ||
@@ -96,21 +95,36 @@ object IndependentGoalVerifier {
                     summary = "Goal outcome verified in current environment state."
                 )
             }
-        } else if (desiredInformation.isNotBlank()) {
-            // Informational postcondition verification: check if empirical information answering query is in evidence
-            val hasAnswerEvidence = evidence.capturedEvidenceMap.values.any { it.isNotBlank() }
-            if (hasAnswerEvidence) {
+        } else if (successConditions.isNotEmpty()) {
+            val allConditionsVerified = successConditions.all { cond ->
+                val condLower = cond.lowercase().trim()
+                visibleTextSet.any { text -> text.contains(condLower) } ||
+                evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(condLower) }
+            }
+
+            if (allConditionsVerified) {
                 return IndependentVerificationOutcome(
                     isVerified = true,
                     status = TaskStatus.COMPLETED,
-                    evidence = "Empirical informational verification satisfied: answer evidence extracted in environment state.",
+                    evidence = "Empirical verification satisfied: model success conditions verified in current observation (${obs.appName}).",
+                    summary = "Goal success conditions satisfied."
+                )
+            }
+        } else if (desiredInformation.isNotBlank()) {
+            val infoMatched = visibleTextSet.any { text -> text.contains(desiredInformation) || desiredInformation.contains(text) } ||
+                    evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(desiredInformation) }
+            if (infoMatched) {
+                return IndependentVerificationOutcome(
+                    isVerified = true,
+                    status = TaskStatus.COMPLETED,
+                    evidence = "Empirical informational verification satisfied: extracted evidence matches desired information in environment state.",
                     summary = "Informational goal outcome verified."
                 )
             }
         } else if (desiredState.isNotBlank()) {
-            // Observable state verification: check if current UI state or visible elements verify the state transition
-            val hasStateEvidence = evidence.capturedEvidenceMap.values.any { it.isNotBlank() }
-            if (hasStateEvidence && obs.visibleText.isNotEmpty()) {
+            val stateMatched = visibleTextSet.any { text -> text.contains(desiredState) || desiredState.contains(text) } ||
+                    evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(desiredState) }
+            if (stateMatched) {
                 return IndependentVerificationOutcome(
                     isVerified = true,
                     status = TaskStatus.COMPLETED,
@@ -120,7 +134,7 @@ object IndependentGoalVerifier {
             }
         }
 
-        // 3. Default: Execution != Success. Return NOT_VERIFIED if empirical evidence is insufficient
+        // 3. Execution != Success. Return NOT_VERIFIED if empirical evidence is insufficient
         val actionCount = evidence.actionHistory.size
         return IndependentVerificationOutcome(
             isVerified = false,
