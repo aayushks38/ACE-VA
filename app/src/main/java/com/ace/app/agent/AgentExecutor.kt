@@ -118,6 +118,11 @@ class AgentExecutor(private val context: Context?) {
                         outputData = universalResult.outputData
                     )
                     taskContext.actionHistory.add("Iteration $iteration: ${decision.primitive}(${decision.target}) -> ${universalResult.status}")
+                    if (universalResult.status == ActionResultStatus.SUCCESS) {
+                        universalResult.outputData.forEach { (k, v) ->
+                            taskContext.capturedEvidence[k] = v
+                        }
+                    }
                     if (!universalResult.evidence.isNullOrBlank()) {
                         taskContext.capturedEvidence["action_${iteration}_evidence"] = universalResult.evidence
                     }

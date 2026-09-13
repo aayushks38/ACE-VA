@@ -54,7 +54,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = ActionResultStatus.SUCCESS,
                         message = "Launched $appName via PackageManager Intent",
-                        evidence = "Launched package ${appInfo.packageName}"
+                        evidence = "Launched package ${appInfo.packageName}",
+                        outputData = mapOf("target_package" to appInfo.packageName, "verified_outcome" to "true")
                     )
                 } else {
                     UniversalActionResult(
@@ -75,7 +76,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = ActionResultStatus.SUCCESS,
                         message = "Opened web URL: $url",
-                        evidence = "ACTION_VIEW intent launched for $url"
+                        evidence = "ACTION_VIEW intent launched for $url",
+                        outputData = mapOf("verified_outcome" to "true", "target_url" to url)
                     )
                 } catch (e: Exception) {
                     UniversalActionResult(
@@ -97,7 +99,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = ActionResultStatus.SUCCESS,
                         message = "Executed web search for '$query'",
-                        evidence = "ACTION_WEB_SEARCH intent sent for '$query'"
+                        evidence = "ACTION_WEB_SEARCH intent sent for '$query'",
+                        outputData = mapOf("verified_outcome" to "true", "query" to query)
                     )
                 } catch (e: Exception) {
                     val searchUrl = "https://www.google.com/search?q=" + Uri.encode(query)
@@ -108,7 +111,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = ActionResultStatus.SUCCESS,
                         message = "Executed web search via browser URL for '$query'",
-                        evidence = "Browser URL launched for '$query'"
+                        evidence = "Browser URL launched for '$query'",
+                        outputData = mapOf("verified_outcome" to "true", "query" to query)
                     )
                 }
             }
@@ -122,7 +126,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = directResult.status,
                         message = directResult.summary,
-                        evidence = directResult.evidenceText
+                        evidence = directResult.evidenceText,
+                        outputData = mapOf("verified_outcome" to "true", "query" to query)
                     )
                 } else {
                     if (!AceAccessibilityService.isServiceEnabled(context)) {
@@ -135,7 +140,8 @@ object UniversalActionExecutor {
                         UniversalActionResult(
                             status = uiResult.status,
                             message = uiResult.summary,
-                            evidence = uiResult.evidenceText
+                            evidence = uiResult.evidenceText,
+                            outputData = if (uiResult.isVerified) mapOf("verified_outcome" to "true") else emptyMap()
                         )
                     }
                 }
@@ -154,7 +160,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = if (clicked) ActionResultStatus.SUCCESS else ActionResultStatus.FAILED,
                         message = if (clicked) "Clicked '$target' on screen" else "Could not click UI element '$target'",
-                        evidence = "Accessibility clickText('$target') result=$clicked"
+                        evidence = "Accessibility clickText('$target') result=$clicked",
+                        outputData = if (clicked) mapOf("action_type" to "click", "target" to target) else emptyMap()
                     )
                 }
             }
@@ -172,7 +179,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = if (typed) ActionResultStatus.SUCCESS else ActionResultStatus.FAILED,
                         message = if (typed) "Typed text into '$target'" else "Could not type text into '$target'",
-                        evidence = "Accessibility typeText result=$typed"
+                        evidence = "Accessibility typeText result=$typed",
+                        outputData = if (typed) mapOf("action_type" to "type", "inputText" to inputText) else emptyMap()
                     )
                 }
             }
@@ -191,7 +199,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = if (scrolled) ActionResultStatus.SUCCESS else ActionResultStatus.FAILED,
                         message = if (scrolled) "Scrolled UI ${if (isUp) "up" else "down"}" else "Could not scroll UI",
-                        evidence = "Accessibility scroll result=$scrolled"
+                        evidence = "Accessibility scroll result=$scrolled",
+                        outputData = if (scrolled) mapOf("action_type" to "scroll") else emptyMap()
                     )
                 }
             }
@@ -204,7 +213,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = if (back) ActionResultStatus.SUCCESS else ActionResultStatus.FAILED,
                         message = if (back) "Performed back gesture" else "Failed to perform back gesture",
-                        evidence = "Accessibility global action back result=$back"
+                        evidence = "Accessibility global action back result=$back",
+                        outputData = if (back) mapOf("action_type" to "back") else emptyMap()
                     )
                 } else {
                     UniversalActionResult(
@@ -225,7 +235,8 @@ object UniversalActionExecutor {
                         UniversalActionResult(
                             status = ActionResultStatus.SUCCESS,
                             message = if (turnOn) "Flashlight turned on" else "Flashlight turned off",
-                            evidence = "CameraManager setTorchMode($turnOn)"
+                            evidence = "CameraManager setTorchMode($turnOn)",
+                            outputData = mapOf("verified_hardware_state" to "true", "hardware_detail" to "Flashlight toggled $turnOn")
                         )
                     } else {
                         UniversalActionResult(
@@ -252,7 +263,8 @@ object UniversalActionExecutor {
                         UniversalActionResult(
                             status = ActionResultStatus.SUCCESS,
                             message = "System volume adjusted",
-                            evidence = "AudioManager adjustStreamVolume direction=$direction"
+                            evidence = "AudioManager adjustStreamVolume direction=$direction",
+                            outputData = mapOf("verified_hardware_state" to "true", "hardware_detail" to "Volume adjusted")
                         )
                     } else {
                         UniversalActionResult(
@@ -278,7 +290,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = ActionResultStatus.SUCCESS,
                         message = "Opened System Settings",
-                        evidence = "ACTION_SETTINGS intent launched"
+                        evidence = "ACTION_SETTINGS intent launched",
+                        outputData = mapOf("verified_outcome" to "true")
                     )
                 } catch (e: Exception) {
                     UniversalActionResult(
@@ -303,7 +316,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = ActionResultStatus.SUCCESS,
                         message = "Launched Android Share Sheet for '$textPayload'",
-                        evidence = "ACTION_SEND chooser launched"
+                        evidence = "ACTION_SEND chooser launched",
+                        outputData = mapOf("verified_outcome" to "true", "share_payload" to textPayload)
                     )
                 } catch (e: Exception) {
                     UniversalActionResult(
@@ -321,7 +335,8 @@ object UniversalActionExecutor {
                     UniversalActionResult(
                         status = if (clicked) ActionResultStatus.SUCCESS else ActionResultStatus.FAILED,
                         message = if (clicked) "Executed generic UI click on '$target'" else "Generic action '$primitive $target' unhandled",
-                        evidence = "Generic Accessibility fallback click result=$clicked"
+                        evidence = "Generic Accessibility fallback click result=$clicked",
+                        outputData = if (clicked) mapOf("action_type" to "click", "target" to target) else emptyMap()
                     )
                 } else {
                     UniversalActionResult(
