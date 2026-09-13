@@ -341,8 +341,8 @@ class GemmaLocalBrain : LocalBrain {
         Log.i(TAG_BRAIN, "ACE_BRAIN: reasonNextDecision called instance=$instanceId app=${observation.appName} state=${observation.screenState}")
 
         if (llamaBridge == null || !isReady()) {
-            Log.w(TAG_INF, "ACE_INFERENCE: Brain not READY. Using heuristic perception fallback.")
-            return@withContext ScreenObservationEngine.determineNextActionHeuristic(cleanGoal, observation)
+            Log.w(TAG_INF, "ACE_INFERENCE: Local Gemma brain not READY.")
+            return@withContext AgentDecision.Blocked("Local AI reasoning engine unavailable.")
         }
 
         val compactUi = ScreenObservationEngine.formatCompactUiRepresentation(cleanGoal, observation)
@@ -375,7 +375,7 @@ class GemmaLocalBrain : LocalBrain {
     private fun parseAgentDecision(goal: String, rawOutput: String, observation: ScreenObservation): AgentDecision {
         val trimmed = rawOutput.trim()
         if (trimmed.isBlank()) {
-            return ScreenObservationEngine.determineNextActionHeuristic(goal, observation)
+            return AgentDecision.Blocked("Local AI model emitted blank reasoning output.")
         }
 
         return try {

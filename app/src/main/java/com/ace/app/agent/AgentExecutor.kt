@@ -18,11 +18,26 @@ class AgentExecutor(private val context: Context?) {
         onConversationalResponse: (String) -> Unit,
         generationId: Long
     ): AgentTask {
+        val objective = GoalUnderstandingEngine.deriveObjective(userGoal)
+        val postcondition = GoalUnderstandingEngine.derivePostcondition(userGoal)
         val taskContext = AgentTaskContext(
             userGoal = userGoal,
-            expectedPostcondition = ExpectedPostcondition(summary = userGoal, desiredState = userGoal),
+            expectedPostcondition = postcondition,
             generationId = generationId
         )
+
+        if (objective.isAmbiguous) {
+            val q = objective.clarificationQuestion ?: "Could you please clarify your goal?"
+            onClarificationNeeded(q)
+            return AgentTask(
+                goal = userGoal,
+                category = TaskCategory.GENERAL,
+                status = TaskStatus.WAITING_FOR_APPROVAL,
+                summary = q,
+                verificationResult = q
+            )
+        }
+
         val actionRecords = mutableListOf<AgentActionRecord>()
         var currentTask = AgentTask(
             goal = userGoal,
@@ -165,7 +180,8 @@ class AgentExecutor(private val context: Context?) {
 
                 is com.ace.app.brain.AgentDecision.Replan -> {
                     Log.i("ACE_REASON", "ACE_REASON: Replan requested updatedGoal=\"${decision.updatedGoal}\"")
-                    taskContext.userGoal = decision.updatedGoal // Update authoritative task context for subsequent reasoning turns
+                    taskContext.userGoal = decision.updatedGoal
+                    taskContext.expectedPostcondition = GoalUnderstandingEngine.derivePostcondition(decision.updatedGoal)
                     taskContext.actionHistory.add("Replan: Goal updated to '${decision.updatedGoal}'")
                     lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
                 }

@@ -55,8 +55,8 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
         val modelName = prefs.getString(KEY_MODEL, "gpt-4o-mini") ?: "gpt-4o-mini"
 
         if (apiKey.isBlank()) {
-            Log.w(TAG, "ACE_CLOUD_BRAIN: API key not configured by user. Falling back to local perception.")
-            return@withContext ScreenObservationEngine.determineNextActionHeuristic(goal, observation)
+            Log.w(TAG, "ACE_CLOUD_BRAIN: API key not configured by user.")
+            return@withContext AgentDecision.Blocked("Cloud API key not configured.")
         }
 
         val compactUi = ScreenObservationEngine.formatCompactUiRepresentation(goal, observation)
@@ -89,7 +89,7 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
 
             if (!response.isSuccessful || responseBodyStr.isBlank()) {
                 Log.e(TAG, "ACE_CLOUD_BRAIN: Cloud HTTP error code=${response.code} body=$responseBodyStr")
-                return@withContext ScreenObservationEngine.determineNextActionHeuristic(goal, observation)
+                return@withContext AgentDecision.Blocked("Cloud reasoning service error (HTTP ${response.code}).")
             }
 
             val jsonRes = JSONObject(responseBodyStr)
@@ -122,7 +122,7 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
             }
         } catch (e: Exception) {
             Log.e(TAG, "ACE_CLOUD_BRAIN: Exception during cloud reasoning call: ${e.message}")
-            ScreenObservationEngine.determineNextActionHeuristic(goal, observation)
+            AgentDecision.Blocked("Cloud reasoning execution error: ${e.message}")
         }
     }
 }
