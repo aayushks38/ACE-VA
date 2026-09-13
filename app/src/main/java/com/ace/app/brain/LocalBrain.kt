@@ -30,10 +30,11 @@ data class ModelHandle(
 )
 
 sealed class BrainResult {
-    data class Success(val plan: AgentPlan, val rawReasoning: String = "") : BrainResult()
+    data class Success(val message: String = "Model initialization successful", val rawReasoning: String = "", val plan: AgentPlan? = null) : BrainResult()
     data class Error(val message: String) : BrainResult()
     object Cancelled : BrainResult()
 }
+
 
 interface LocalBrain : ReasoningBrain {
     suspend fun initialize(context: Context, handle: ModelHandle): BrainResult

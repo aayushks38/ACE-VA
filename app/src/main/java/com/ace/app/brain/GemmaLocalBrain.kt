@@ -72,8 +72,8 @@ class GemmaLocalBrain : LocalBrain {
                 Log.i(TAG_BRAIN, "ACE_BRAIN: state=READY")
                 Log.i(TAG_LOAD, "ACE_MODEL_LOAD: skipped — model already loaded")
                 return@withContext BrainResult.Success(
-                    plan = AgentPlan(userGoal = "System Initialization", intent = "system", steps = emptyList()),
-                    rawReasoning = "Gemma model already loaded and ready."
+                    message = "Gemma model already loaded into memory and ready.",
+                    rawReasoning = "Model handle reused."
                 )
             }
 
@@ -199,7 +199,7 @@ class GemmaLocalBrain : LocalBrain {
                 }
 
                 return@withContext BrainResult.Success(
-                    plan = AgentPlan(userGoal = "System Initialization", intent = "system", steps = emptyList()),
+                    message = "Gemma model loaded into memory and ready.",
                     rawReasoning = "Gemma 3n E2B GGUF Model Loaded & Ready."
                 )
             } catch (e: Exception) {
