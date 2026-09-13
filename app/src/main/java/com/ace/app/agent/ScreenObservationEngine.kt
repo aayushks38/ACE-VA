@@ -10,7 +10,8 @@ data class ScreenElement(
     val isEditable: Boolean,
     val isScrollable: Boolean,
     val isSelected: Boolean,
-    val boundsInScreen: String,
+    val isEnabled: Boolean = true,
+    val boundsInScreen: String = "",
     val nodeRef: AccessibilityNodeInfo? = null
 )
 
@@ -86,6 +87,10 @@ object ScreenObservationEngine {
         if (nodeText.isNotBlank()) texts.add(nodeText)
         if (contentDesc.isNotBlank() && contentDesc != nodeText) texts.add(contentDesc)
 
+        val rect = android.graphics.Rect()
+        node.getBoundsInScreen(rect)
+        val boundsStr = if (!rect.isEmpty) "[${rect.left},${rect.top},${rect.right},${rect.bottom}]" else ""
+
         val elem = ScreenElement(
             id = viewId,
             text = nodeText,
@@ -94,7 +99,8 @@ object ScreenObservationEngine {
             isEditable = node.isEditable,
             isScrollable = node.isScrollable,
             isSelected = node.isSelected,
-            boundsInScreen = "",
+            isEnabled = node.isEnabled,
+            boundsInScreen = boundsStr,
             nodeRef = node
         )
 
@@ -137,15 +143,30 @@ object ScreenObservationEngine {
 
     /** Formats token-efficient compact UI representation string for Gemma UI reasoning fallback. */
     fun formatCompactUiRepresentation(userGoal: String, observation: ScreenObservation): String {
-        val clickables = observation.clickableElements.mapNotNull {
-            val label = (it.text.ifBlank { it.contentDescription }).trim()
-            if (label.isNotBlank()) label else null
-        }.distinct().take(12)
+        var index = 1
+        val elementLines = mutableListOf<String>()
 
-        val editables = observation.editableElements.mapNotNull {
-            val label = (it.text.ifBlank { it.contentDescription }).trim()
-            if (label.isNotBlank()) label else null
-        }.distinct().take(6)
+        observation.editableElements.take(6).forEach { elem ->
+            val label = (elem.text.ifBlank { elem.contentDescription }).trim()
+            if (label.isNotBlank()) {
+                val bounds = if (elem.boundsInScreen.isNotBlank()) " bounds=${elem.boundsInScreen}" else ""
+                elementLines.add("[$index] EDITABLE text=\"$label\"$bounds")
+                index++
+            }
+        }
+
+        observation.clickableElements.take(15).forEach { elem ->
+            val label = (elem.text.ifBlank { elem.contentDescription }).trim()
+            if (label.isNotBlank()) {
+                val type = if (elem.isEditable) "EDITABLE" else "CLICKABLE"
+                val bounds = if (elem.boundsInScreen.isNotBlank()) " bounds=${elem.boundsInScreen}" else ""
+                val line = "[$index] $type text=\"$label\"$bounds"
+                if (!elementLines.contains(line)) {
+                    elementLines.add(line)
+                    index++
+                }
+            }
+        }
 
         val scrollables = observation.scrollableElements.mapNotNull {
             val label = (it.text.ifBlank { it.contentDescription }).trim()
@@ -158,8 +179,10 @@ object ScreenObservationEngine {
             append("APP: ${observation.appName.ifBlank { observation.packageName }}\n")
             append("SCREEN_STATE: ${observation.screenState}\n")
             append("PERCEPTION_AVAILABLE: ${observation.isPerceptionAvailable}\n")
-            if (editables.isNotEmpty()) append("EDITABLE_FIELDS: $editables\n")
-            if (clickables.isNotEmpty()) append("CLICKABLE_ELEMENTS: $clickables\n")
+            if (elementLines.isNotEmpty()) {
+                append("INTERACTIVE_ELEMENTS:\n")
+                elementLines.forEach { append("  ").append(it).append("\n") }
+            }
             if (scrollables.isNotEmpty()) append("SCROLLABLE_CONTAINERS: $scrollables\n")
             if (texts.isNotEmpty()) append("VISIBLE_TEXT_NODES: $texts\n")
         }
