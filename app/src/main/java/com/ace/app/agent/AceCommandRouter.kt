@@ -144,6 +144,14 @@ class AceCommandRouter {
         return CommandRoute.DeepBrain(brainResult)
     }
 
+    private fun safeLog(tag: String, msg: String) {
+        try {
+            Log.i(tag, msg)
+        } catch (_: Throwable) {
+            println("$tag: $msg")
+        }
+    }
+
     private fun logRouting(
         command: String,
         complexity: Int,
@@ -155,23 +163,23 @@ class AceCommandRouter {
         brainRequired: Boolean,
         brainAvailable: Boolean
     ) {
-        Log.i("ACE_ROUTER", "ACE_ROUTER: command=$command")
-        Log.i("ACE_ROUTER", "ACE_ROUTER: complexity=$complexity")
-        Log.i("ACE_ROUTER", "ACE_ROUTER: deterministic_match=$deterministicMatch")
-        Log.i("ACE_ROUTER", "ACE_ROUTER: route=$route")
-        Log.i("ACE_ROUTER", "ACE_ROUTER: GEMMA_BYPASSED=$gemmaBypassed")
-        Log.i("ACE_ROUTER", "ACE_ROUTER: execution_mode=$executionMode")
-        Log.i("ACE_ROUTER", "ACE_ROUTER: brain_required=$brainRequired")
-        Log.i("ACE_ROUTER", "ACE_ROUTER: brain_available=$brainAvailable")
+        safeLog("ACE_ROUTER", "ACE_ROUTER: command=$command")
+        safeLog("ACE_ROUTER", "ACE_ROUTER: complexity=$complexity")
+        safeLog("ACE_ROUTER", "ACE_ROUTER: deterministic_match=$deterministicMatch")
+        safeLog("ACE_ROUTER", "ACE_ROUTER: route=$route")
+        safeLog("ACE_ROUTER", "ACE_ROUTER: GEMMA_BYPASSED=$gemmaBypassed")
+        safeLog("ACE_ROUTER", "ACE_ROUTER: execution_mode=$executionMode")
+        safeLog("ACE_ROUTER", "ACE_ROUTER: brain_required=$brainRequired")
+        safeLog("ACE_ROUTER", "ACE_ROUTER: brain_available=$brainAvailable")
         if (route == RouteType.DEEP_BRAIN) {
-            Log.i("ACE_ROUTER", "ACE_ROUTER: reason=$reason")
+            safeLog("ACE_ROUTER", "ACE_ROUTER: reason=$reason")
         }
     }
 
     private fun logWorkflow(steps: List<TaskStep>) {
-        Log.i("ACE_WORKFLOW", "ACE_WORKFLOW: steps=${steps.size}")
+        safeLog("ACE_WORKFLOW", "ACE_WORKFLOW: steps=${steps.size}")
         for ((idx, step) in steps.withIndex()) {
-            Log.i("ACE_WORKFLOW", "ACE_WORKFLOW: step=${idx + 1} capability=${step.capabilityId}")
+            safeLog("ACE_WORKFLOW", "ACE_WORKFLOW: step=${idx + 1} capability=${step.capabilityId}")
         }
     }
 

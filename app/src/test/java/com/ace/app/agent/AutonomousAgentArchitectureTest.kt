@@ -297,4 +297,60 @@ class AutonomousAgentArchitectureTest {
         assertEquals(TaskStatus.NOT_VERIFIED, outcome.status)
         assertTrue(outcome.evidence.contains("unavailable"))
     }
+
+    // 18. Loaded Gemma runtime reports ready everywhere and UI & AgentExecutor agree.
+    @Test
+    fun testUnifiedGemmaReadinessAgreement() {
+        val mockBrain = object : com.ace.app.brain.LocalBrain {
+            override val backendType = ReasoningBackend.LOCAL_GEMMA
+            override suspend fun initialize(context: android.content.Context, handle: com.ace.app.brain.ModelHandle): com.ace.app.brain.BrainResult = com.ace.app.brain.BrainResult.Success("Ready")
+            override suspend fun cancel() {}
+            override fun getBrainState(): com.ace.app.brain.BrainState = com.ace.app.brain.BrainState.READY
+            override fun close() {}
+            override fun isReady(): Boolean = true
+            override suspend fun reasonNextDecision(goal: String, observation: ScreenObservation, context: AgentTaskContext, generationId: Long): AgentDecision {
+                return AgentDecision.Action(primitive = "CLICK", target = "Submit")
+            }
+        }
+
+        val obs = ScreenObservation(packageName = "com.app", appName = "App", visibleText = listOf("Submit"), screenState = "Interactive")
+        val context = AgentTaskContext(userGoal = "Test goal")
+
+        val selectedBrain = BrainRouter.selectBrain("Test goal", obs, context, mockBrain)
+        assertTrue("Selected brain must report isReady()=true when local brain is READY", selectedBrain.isReady())
+        assertEquals("Brain instance identity must match provided local brain", System.identityHashCode(mockBrain), System.identityHashCode(selectedBrain))
+    }
+
+    // 19. A missing runtime reports unavailable everywhere.
+    @Test
+    fun testMissingRuntimeReportsUnavailableEverywhere() {
+        val obs = ScreenObservation(packageName = "android", appName = "System")
+        val context = AgentTaskContext(userGoal = "Missing brain test")
+
+        val selectedBrain = BrainRouter.selectBrain("Missing brain test", obs, context, null)
+        assertFalse("Unloaded brain must report isReady()=false", selectedBrain.isReady())
+    }
+
+    // 20. Novel natural language goal ("Find admissions for Ketam University") routes to DeepBrain for Gemma execution.
+    @Test
+    fun testNovelNaturalLanguageGoalRoutesToDeepBrain() {
+        val router = AceCommandRouter()
+        val goal = "Find the admission requirements for ketam University and tell me what documents are required"
+        val route = router.route(goal, brainAvailable = true)
+
+        assertTrue("Novel natural language goal must route to DeepBrain", route is CommandRoute.DeepBrain)
+        val deepRoute = route as CommandRoute.DeepBrain
+        assertEquals(RouteType.DEEP_BRAIN, deepRoute.result.route)
+        assertTrue("Brain must be required for novel reasoning goal", deepRoute.result.brainRequired)
+    }
+
+    // 21. "Find me the latest" routes to DeepBrain for Gemma interpretation and clarification.
+    @Test
+    fun testFindMeTheLatestRoutesToDeepBrainForClarification() {
+        val router = AceCommandRouter()
+        val goal = "Find me the latest"
+        val route = router.route(goal, brainAvailable = true)
+
+        assertTrue("Underspecified goal must route to DeepBrain for Gemma clarification", route is CommandRoute.DeepBrain)
+    }
 }

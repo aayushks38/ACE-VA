@@ -47,6 +47,22 @@ object AceLatencyTracker {
     val pollCount = AtomicInteger(0)
     val uiReasoningCount = AtomicInteger(0)
 
+    private fun safeRealtimeMs(): Long {
+        return try {
+            SystemClock.elapsedRealtime()
+        } catch (_: Throwable) {
+            System.currentTimeMillis()
+        }
+    }
+
+    private fun safeLog(tag: String, msg: String) {
+        try {
+            Log.i(tag, msg)
+        } catch (_: Throwable) {
+            println("$tag: $msg")
+        }
+    }
+
     @Synchronized
     fun startTask(t0TimestampMs: Long = System.currentTimeMillis()) {
         stageTimestamps.clear()
@@ -55,7 +71,7 @@ object AceLatencyTracker {
         stageTimestamps["T0"] = t0Ms
         isTracking = true
 
-        taskStartRealtimeMs = SystemClock.elapsedRealtime()
+        taskStartRealtimeMs = safeRealtimeMs()
         gemmaCallCount.set(0)
         accessibilityWaitMs.set(0L)
         fixedDelayCount.set(0)
@@ -64,7 +80,7 @@ object AceLatencyTracker {
         pollCount.set(0)
         uiReasoningCount.set(0)
 
-        Log.i(TAG, "ACE_LATENCY: stage=T0 timestamp=$t0Ms")
+        safeLog(TAG, "ACE_LATENCY: stage=T0 timestamp=$t0Ms")
         mark("speech_start")
     }
 
@@ -82,7 +98,7 @@ object AceLatencyTracker {
         stageTimestamps[stage] = timestampMs
         val delta = timestampMs - lastStageMs
         lastStageMs = timestampMs
-        Log.i(TAG, "ACE_LATENCY: stage=$stage timestamp=$timestampMs delta_ms=$delta")
+        safeLog(TAG, "ACE_LATENCY: stage=$stage timestamp=$timestampMs delta_ms=$delta")
         mark(stage.lowercase())
     }
 
@@ -90,9 +106,9 @@ object AceLatencyTracker {
     fun getStageTimestamp(stage: String): Long? = stageTimestamps[stage]
 
     fun mark(markerName: String) {
-        val now = SystemClock.elapsedRealtime()
+        val now = safeRealtimeMs()
         val elapsed = if (taskStartRealtimeMs > 0) now - taskStartRealtimeMs else 0L
-        Log.i(TAG, "ACE_LATENCY: marker=$markerName elapsed_ms=$elapsed")
+        safeLog(TAG, "ACE_LATENCY: marker=$markerName elapsed_ms=$elapsed")
     }
 
     fun recordModelLoad() { modelLoadCount.incrementAndGet() }

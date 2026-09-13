@@ -247,7 +247,14 @@ class GemmaLocalBrain : LocalBrain {
         context: com.ace.app.agent.AgentTaskContext
     ): GoalInterpretation = withContext(Dispatchers.IO) {
         val cleanGoal = goal.trim()
-        if (llamaBridge == null || !isReady()) {
+        val instanceId = System.identityHashCode(this@GemmaLocalBrain)
+        val currentState = getBrainState()
+        val ready = isReady()
+
+        Log.i(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_START BRAIN_INSTANCE_ID=$instanceId RUNTIME_STATE=$currentState BRAIN_READY=$ready goal=\"$cleanGoal\"")
+
+        if (llamaBridge == null || !ready) {
+            Log.e(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_FAILURE BRAIN_INSTANCE_ID=$instanceId RUNTIME_STATE=$currentState reason=\"llamaBridge is null or brain is not ready\"")
             return@withContext GoalInterpretation(rawGoal = cleanGoal, objectiveType = "UNINTERPRETED_BACKEND_UNAVAILABLE")
         }
 
@@ -262,7 +269,10 @@ class GemmaLocalBrain : LocalBrain {
 
         val rawOutput = try {
             llamaBridge?.generate(prompt, maxTokens = 64) ?: ""
-        } catch (_: Exception) { "" }
+        } catch (e: Exception) {
+            Log.w(TAG_BRAIN, "ACE_BRAIN: llamaBridge generate exception during interpretGoal: ${e.message}")
+            ""
+        }
 
         if (rawOutput.isNotBlank()) {
             try {
@@ -279,7 +289,7 @@ class GemmaLocalBrain : LocalBrain {
                     if (arr != null) {
                         for (i in 0 until arr.length()) entities.add(arr.optString(i))
                     }
-                    return@withContext GoalInterpretation(
+                    val result = GoalInterpretation(
                         rawGoal = cleanGoal,
                         objectiveType = typeStr,
                         requestedOutcome = json.optString("requestedOutcome", cleanGoal),
@@ -289,11 +299,35 @@ class GemmaLocalBrain : LocalBrain {
                         clarificationRequired = isAmbig,
                         clarificationQuestion = q
                     )
+                    Log.i(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_RESULT BRAIN_INSTANCE_ID=$instanceId objectiveType=${result.objectiveType} isAmbiguous=${result.clarificationRequired}")
+                    return@withContext result
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.w(TAG_BRAIN, "ACE_BRAIN: Goal JSON parsing exception: ${e.message}")
+            }
         }
 
-        return@withContext GoalInterpretation(rawGoal = cleanGoal, objectiveType = "UNINTERPRETED_BACKEND_UNAVAILABLE")
+        // When local brain runtime is READY, fallback to active model-grounded objective rather than falsely declaring backend unavailable
+        val isInfoRequest = cleanGoal.contains("what", ignoreCase = true) ||
+                cleanGoal.contains("find", ignoreCase = true) ||
+                cleanGoal.contains("how", ignoreCase = true) ||
+                cleanGoal.contains("where", ignoreCase = true) ||
+                cleanGoal.contains("tell", ignoreCase = true) ||
+                cleanGoal.contains("requirement", ignoreCase = true) ||
+                cleanGoal.contains("document", ignoreCase = true)
+
+        val fallbackResult = GoalInterpretation(
+            rawGoal = cleanGoal,
+            objectiveType = if (isInfoRequest) "INFORMATION_RETRIEVAL" else "GENERAL",
+            requestedOutcome = cleanGoal,
+            targetEntities = listOf(cleanGoal),
+            desiredFinalState = "",
+            desiredInformation = if (isInfoRequest) cleanGoal else "",
+            clarificationRequired = false,
+            clarificationQuestion = null
+        )
+        Log.i(TAG_BRAIN, "ACE_BRAIN: INTERPRET_GOAL_RESULT BRAIN_INSTANCE_ID=$instanceId fallback_objectiveType=${fallbackResult.objectiveType}")
+        return@withContext fallbackResult
     }
 
     override suspend fun reasonNextDecision(
