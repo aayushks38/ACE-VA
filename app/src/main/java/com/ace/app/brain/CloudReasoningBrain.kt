@@ -1,0 +1,127 @@
+package com.ace.app.brain
+
+import android.content.Context
+import android.util.Log
+import com.ace.app.agent.AgentTaskContext
+import com.ace.app.agent.ScreenObservation
+import com.ace.app.agent.ScreenObservationEngine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+/**
+ * Pluggable Cloud Reasoning Provider.
+ * Connects to a user-configured cloud endpoint (e.g., OpenAI / Gemini / Claude API).
+ * Reads user-provided API credentials securely from app preferences.
+ * Implements the exact same ReasoningBrain contract as local on-device inference.
+ */
+class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
+
+    override val backendType: ReasoningBackend = ReasoningBackend.CLOUD_PROVIDER
+
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    companion object {
+        private const val TAG = "ACE_CLOUD_BRAIN"
+        private const val PREFS_NAME = "ace_cloud_settings"
+        private const val KEY_ENDPOINT = "cloud_api_endpoint"
+        private const val KEY_API_KEY = "cloud_api_key"
+        private const val KEY_MODEL = "cloud_model_name"
+    }
+
+    override fun isReady(): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val apiKey = prefs.getString(KEY_API_KEY, "") ?: ""
+        return apiKey.isNotBlank()
+    }
+
+    override suspend fun reasonNextDecision(
+        goal: String,
+        observation: ScreenObservation,
+        context: AgentTaskContext,
+        generationId: Long
+    ): AgentDecision = withContext(Dispatchers.IO) {
+        val prefs = this@CloudReasoningBrain.context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val endpoint = prefs.getString(KEY_ENDPOINT, "https://api.openai.com/v1/chat/completions") ?: "https://api.openai.com/v1/chat/completions"
+        val apiKey = prefs.getString(KEY_API_KEY, "") ?: ""
+        val modelName = prefs.getString(KEY_MODEL, "gpt-4o-mini") ?: "gpt-4o-mini"
+
+        if (apiKey.isBlank()) {
+            Log.w(TAG, "ACE_CLOUD_BRAIN: API key not configured by user. Falling back to local perception.")
+            return@withContext ScreenObservationEngine.determineNextActionHeuristic(goal, observation)
+        }
+
+        val compactUi = ScreenObservationEngine.formatCompactUiRepresentation(goal, observation)
+        val jsonPayload = JSONObject().apply {
+            put("model", modelName)
+            put("messages", org.json.JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", "You are ACE, an autonomous computer-use agent for Android. Return JSON with status: DONE|CONTINUE|CLARIFY, action: ui_click|ui_type|ui_scroll|web_open_url|ui_open_app, target, text, question, reason.")
+                })
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", "Goal: $goal\nObservation:\n$compactUi")
+                })
+            })
+            put("temperature", 0.1)
+        }
+
+        try {
+            val body = jsonPayload.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url(endpoint)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .post(body)
+                .build()
+
+            val response = httpClient.newCall(request).execute()
+            val responseBodyStr = response.body?.string() ?: ""
+
+            if (!response.isSuccessful || responseBodyStr.isBlank()) {
+                Log.e(TAG, "ACE_CLOUD_BRAIN: Cloud HTTP error code=${response.code} body=$responseBodyStr")
+                return@withContext ScreenObservationEngine.determineNextActionHeuristic(goal, observation)
+            }
+
+            val jsonRes = JSONObject(responseBodyStr)
+            val choices = jsonRes.optJSONArray("choices")
+            val contentStr = choices?.optJSONObject(0)?.optJSONObject("message")?.optString("content", "") ?: ""
+
+            val rawTrimmed = contentStr.trim()
+            val sStart = rawTrimmed.indexOf('{')
+            val sEnd = rawTrimmed.lastIndexOf('}')
+            if (sStart != -1 && sEnd > sStart) {
+                val parsedObj = JSONObject(rawTrimmed.substring(sStart, sEnd + 1))
+                val status = parsedObj.optString("status", "CONTINUE").uppercase()
+                when {
+                    status == "CLARIFY" || parsedObj.optBoolean("clarificationNeeded", false) -> {
+                        AgentDecision.Clarify(parsedObj.optString("question", "Could you clarify what you'd like me to do?"))
+                    }
+                    status == "DONE" || status == "COMPLETE" -> {
+                        AgentDecision.Complete(parsedObj.optString("reason", "Goal satisfied"))
+                    }
+                    else -> {
+                        AgentDecision.Action(
+                            primitive = parsedObj.optString("action", "ui_click"),
+                            target = parsedObj.optString("target", ""),
+                            inputText = parsedObj.optString("text", "")
+                        )
+                    }
+                }
+            } else {
+                AgentDecision.ConversationalResponse(rawTrimmed)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "ACE_CLOUD_BRAIN: Exception during cloud reasoning call: ${e.message}")
+            ScreenObservationEngine.determineNextActionHeuristic(goal, observation)
+        }
+    }
+}

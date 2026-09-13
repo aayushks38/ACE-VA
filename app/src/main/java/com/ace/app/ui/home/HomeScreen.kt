@@ -85,6 +85,7 @@ fun HomeScreen(
                 val goal = intent?.getStringExtra("goal")
                 android.util.Log.i("ACE_BROADCAST_RX", "ACE_BROADCAST_RX: goal='$goal' isBlank=${goal.isNullOrBlank()}")
                 if (!goal.isNullOrBlank()) {
+                    com.ace.app.utils.AceLatencyTracker.startTask()
                     android.util.Log.i("ACE_BROADCAST_RX", "ACE_BROADCAST_RX: calling handleSpokenInput with goal='$goal'")
                     viewModel.handleSpokenInput(goal)
                 } else {
@@ -116,39 +117,49 @@ fun HomeScreen(
         }
     }
 
+    val taskPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val anyGranted = permissions.values.any { it }
+        if (anyGranted) {
+            val task = state.activeTask
+            if (task != null && task.status == TaskStatus.WAITING_FOR_USER) {
+                viewModel.resumeTask(task)
+            }
+        }
+    }
+
+    LaunchedEffect(state.activeTask?.status, state.activeTask?.summary) {
+        val task = state.activeTask
+        if (task != null && task.status == TaskStatus.WAITING_FOR_USER) {
+            val summary = task.summary.lowercase()
+            val neededPermissions = mutableListOf<String>()
+            if (summary.contains("read_contacts") || summary.contains("contact")) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                    neededPermissions.add(Manifest.permission.READ_CONTACTS)
+                }
+            }
+            if (summary.contains("call_phone") || summary.contains("phone call") || summary.contains("call")) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+                    neededPermissions.add(Manifest.permission.CALL_PHONE)
+                }
+            }
+            if (summary.contains("read_phone_state")) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+                    neededPermissions.add(Manifest.permission.READ_PHONE_STATE)
+                }
+            }
+            if (neededPermissions.isNotEmpty()) {
+                taskPermissionLauncher.launch(neededPermissions.toTypedArray())
+            }
+        }
+    }
+
     fun triggerVoiceInput() {
-        when (state.voiceState) {
-            VoiceState.SPEAKING -> {
-                // Interrupt speech: stop TTS, clear pending progress, then listen
-                voiceManager.stopSpeaking()
-                AceProgressSpeaker.clear(0L)
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                    voiceManager.startListening()
-                }
-            }
-            VoiceState.EXECUTING -> {
-                // Interrupt execution: cancel is handled by TaskViewModel when new goal arrives
-                // Just start listening — new submitVoiceGoal will cancel old task
-                AceProgressSpeaker.clear(0L)
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                    voiceManager.startListening()
-                }
-            }
-            VoiceState.LISTENING -> voiceManager.stopListening()
-            VoiceState.THINKING -> {
-                // Can't easily interrupt thinking; just ignore second tap
-            }
-            VoiceState.IDLE -> {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                    voiceManager.startListening()
-                } else {
-                    permissionsLauncher.launch(arrayOf(
-                        Manifest.permission.RECORD_AUDIO,
-                        Manifest.permission.READ_CONTACTS,
-                        Manifest.permission.CALL_PHONE
-                    ))
-                }
-            }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            voiceManager.startListening()
+        } else {
+            permissionsLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
         }
     }
 
@@ -253,7 +264,7 @@ fun HomeScreen(
                         VoiceState.IDLE -> "Tap to speak"
                         VoiceState.LISTENING -> "Listening..."
                         VoiceState.THINKING -> "Thinking..."
-                        VoiceState.EXECUTING -> "Working..."
+                        VoiceState.EXECUTING -> if (state.currentActionLabel.isNotBlank()) state.currentActionLabel else "Working..."
                         VoiceState.SPEAKING -> "ACE speaks..."
                     }
                     val statusColor = when (state.voiceState) {

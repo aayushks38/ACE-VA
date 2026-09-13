@@ -71,11 +71,13 @@ class VoiceManager(
 
     fun startListening(sessionId: String = "voice_session_${System.currentTimeMillis()}", retryCount: Int = 0) {
         mainHandler.post {
-            // Don't restart if already actively listening
-            if (currentState == VoiceState.LISTENING) {
-                Log.w("ACE_SPEECH", "ACE_SPEECH: startListening ignored — already in LISTENING state")
-                return@post
-            }
+            // Cleanly tear down any ongoing recognition session or TTS playback
+            rimeOutput?.stop()
+            try {
+                recognizer?.stopListening()
+                recognizer?.destroy()
+            } catch (_: Exception) {}
+            recognizer = null
 
             activeSessionId = sessionId
             partialResultsCount = 0
@@ -89,11 +91,8 @@ class VoiceManager(
             if (currentState == VoiceState.SPEAKING) {
                 Log.i("ACE_INTERRUPT", "ACE_INTERRUPT: user speech barge-in detected during TTS")
                 Log.i("ACE_TTS", "ACE_TTS: speech stopped")
-                rimeOutput?.stop()
-                currentState = VoiceState.IDLE
-            } else {
-                rimeOutput?.stop()
             }
+            currentState = VoiceState.LISTENING
 
             val hasPerm = androidx.core.content.ContextCompat.checkSelfPermission(
                 context, android.Manifest.permission.RECORD_AUDIO
@@ -186,6 +185,7 @@ class VoiceManager(
 
                         if (isValid) {
                             processedSessionIds.add(currentSession)
+                            com.ace.app.utils.AceLatencyTracker.startTask()
                             Log.i("ACE_SPEECH", "ACE_SPEECH: session=$currentSession final_result=\"$spokenText\" execute=true synthetic_event=false")
                             Log.i("ACE_COMMAND", "ACE_COMMAND: session=$currentSession routing_started=true goal=\"$spokenText\"")
                             mainHandler.post { onSpeechRecognized(spokenText) }

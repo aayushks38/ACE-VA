@@ -39,6 +39,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # was verified against. A full clone is used (GIT_SHALLOW is not set below), which
 # is required to check out an arbitrary commit SHA.
 set(LLAMA_CPP_TAG "64a155d242cb427766055ea9caea6f34df1ca94b" CACHE STRING "llama.cpp git commit (pinned for reproducibility)")
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "Skip updating fetched content" FORCE)
 
 include(FetchContent)
 
@@ -82,4 +83,12 @@ target_link_libraries(
         ggml
         android
         ${log-lib}
+)
+
+# Enforce 16 KB ELF alignment for Android 16 KB page size compatibility
+target_link_options(
+        llama_jni
+        PRIVATE
+        "-Wl,-z,max-page-size=16384"
+        "-Wl,-z,common-page-size=16384"
 )

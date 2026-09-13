@@ -16,9 +16,16 @@ object AceConversationContext {
         Log.i("ACE_CONTEXT", "ACE_CONTEXT: context updated goal=\"$goal\" app=\"${activeApp ?: "none"}\"")
     }
 
-    fun clearCancelledContext() {
+    fun clearSession() {
+        lastGoal = null
+        lastResponse = null
+        activeApp = null
         activeTask = null
-        Log.i("ACE_CONTEXT", "ACE_CONTEXT: cancelled task context cleared")
+        Log.i("ACE_CONTEXT", "ACE_CONTEXT: task session context cleared completely")
+    }
+
+    fun clearCancelledContext() {
+        clearSession()
     }
 
     fun getActiveApp(): String? = activeApp

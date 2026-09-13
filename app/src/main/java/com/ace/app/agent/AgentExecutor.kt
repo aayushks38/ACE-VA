@@ -26,6 +26,20 @@ class AgentExecutor(private val context: Context?) {
         Log.i("ACE_EXECUTOR", "ACE_EXECUTOR: Received AgentPlan for goal '${task.goal}' with ${task.steps.size} step(s)")
         Log.i("ACE_EXECUTOR", "ACE_EXECUTOR: brain_required=$brainRequired brain_available=$brainAvailable")
 
+        // Safety Invariant: Ensure plan domain matches goal domain
+        val planRejectionReason = validatePlanGoalDomainMatch(task.goal, task.steps)
+        if (planRejectionReason != null) {
+            Log.e("ACE_SAFETY", "ACE_SAFETY: PLAN_REJECTED domain_mismatch goal='${task.goal}' reason='$planRejectionReason'")
+            val rejectedTask = task.copy(
+                status = TaskStatus.FAILED,
+                summary = planRejectionReason,
+                verificationResult = planRejectionReason,
+                completedAt = System.currentTimeMillis()
+            )
+            onStepUpdated(rejectedTask)
+            return rejectedTask
+        }
+
         // 1. Goal Requirement & Plan Completeness Extraction
         val planCompleteness = GoalRequirementExtractor.evaluatePlanCompleteness(task.goal, task.steps)
 
@@ -126,6 +140,23 @@ class AgentExecutor(private val context: Context?) {
             }
             if (!steps[i].isComplete) {
                 val step = steps[i]
+
+                // Step Dependency Safeguard: Check if any parent steps failed or are incomplete
+                val incompleteParents = steps.filter { step.dependsOnStepIds.contains(it.id) && !it.isComplete }
+                if (incompleteParents.isNotEmpty()) {
+                    val parentOutput = incompleteParents.firstOrNull()?.output ?: "Parent step incomplete"
+                    Log.w("ACE_EXECUTOR", "ACE_EXECUTOR: Skipping step ${step.id} (${step.capabilityId}) because parent step failed or is incomplete: $parentOutput")
+                    steps[i] = step.copy(
+                        isRunning = false,
+                        isComplete = false,
+                        isVerified = false,
+                        output = "Dependency unfulfilled: $parentOutput"
+                    )
+                    currentTask = currentTask.copy(steps = steps.toList())
+                    onStepUpdated(currentTask)
+                    continue
+                }
+
                 steps[i] = step.copy(isRunning = true)
                 onStepUpdated(currentTask.copy(steps = steps.toList()))
 
@@ -166,11 +197,9 @@ class AgentExecutor(private val context: Context?) {
             }
         }
 
-        // Verification phase & Truthful Goal Status Calculation
         // Verification phase & Truthful Goal Requirement Calculation
         currentTask = currentTask.copy(status = TaskStatus.VERIFYING)
         onStepUpdated(currentTask)
-        delay(300)
 
         val evalResult = GoalRequirementExtractor.evaluatePlanCompleteness(task.goal, steps)
         val isPlanComplete = isPlanCompleteOverride ?: evalResult.isPlanComplete
@@ -295,31 +324,53 @@ class AgentExecutor(private val context: Context?) {
         Log.i("ACE_VERIFY", "ACE_VERIFY: evaluating requirement id=${req.id} description=${req.description}")
         
         return when (req.id) {
-            "req_1_phone_dial" -> {
-                Log.i("ACE_VERIFY", "ACE_VERIFY: phone_dial requirement handler")
-                // Phone call requirement: check if contact_lookup + phone_dialer both succeeded
-                // AND the phone_dialer capability returned callInitiated=true
+            "req_1_phone_call" -> {
+                Log.i("ACE_VERIFY", "ACE_VERIFY: phone_call requirement handler")
                 val contactStep = steps.firstOrNull { it.capabilityId == "contact_lookup" }
-                val dialStep = steps.firstOrNull { it.capabilityId == "phone_dialer" }
+                val callStep = steps.firstOrNull { it.capabilityId == "phone_call" }
                 
-                Log.i("ACE_VERIFY", "ACE_VERIFY: contact_lookup_step_exists=${contactStep != null} contact_complete=${contactStep?.isComplete}")
-                Log.i("ACE_VERIFY", "ACE_VERIFY: phone_dialer_step_exists=${dialStep != null} dial_complete=${dialStep?.isComplete}")
-                
+                val callIntentDispatched = accumulatedOutputs["callIntentDispatched"] == "true" || accumulatedOutputs["callInitiated"] == "true"
+                val callState = accumulatedOutputs["callState"] ?: "UNKNOWN"
                 val recipientVerified = accumulatedOutputs["recipientVerified"] == "true"
-                val callInitiated = accumulatedOutputs["callInitiated"] == "true"
                 val recipient = accumulatedOutputs["recipient"] ?: accumulatedOutputs["contactName"] ?: "contact"
+                val phoneNumber = accumulatedOutputs["phoneNumber"] ?: ""
+                val cleanNum = phoneNumber.replace(Regex("[^0-9+]"), "")
+                val isNumberValid = cleanNum.isNotBlank() && cleanNum.length >= 3
                 
-                Log.i("ACE_VERIFY", "ACE_VERIFY: recipientVerified=$recipientVerified callInitiated=$callInitiated recipient=$recipient")
+                Log.i("ACE_VERIFY", "ACE_VERIFY: contact_step_complete=${contactStep?.isComplete} call_step_complete=${callStep?.isComplete} callIntentDispatched=$callIntentDispatched callState=$callState recipientVerified=$recipientVerified phoneNumber=$phoneNumber")
                 
-                if (contactStep?.isComplete == true && dialStep?.isComplete == true && callInitiated && recipientVerified) {
-                    Log.i("ACE_VERIFY", "ACE_VERIFY: Make Phone Call=VERIFIED")
-                    req.copy(isVerified = true, verificationDetails = "Phone call to '$recipient' initiated successfully.")
-                } else if (!callInitiated) {
-                    Log.i("ACE_VERIFY", "ACE_VERIFY: Make Phone Call=UNVERIFIED reason=callInitiated_false")
-                    req.copy(isVerified = false, verificationDetails = "Call not actually initiated despite step completion.")
+                if (callStep?.isComplete == true && callIntentDispatched && recipientVerified && isNumberValid) {
+                    if (callState == "CALL_STATE_OFFHOOK" || callState == "CALL_STATE_RINGING") {
+                        Log.i("ACE_VERIFY", "ACE_VERIFY: Make Phone Call=VERIFIED callState=$callState")
+                        req.copy(isVerified = true, verificationDetails = "Direct phone call to '$recipient' ($cleanNum) confirmed active on telephony line ($callState).")
+                    } else {
+                        Log.i("ACE_VERIFY", "ACE_VERIFY: Make Phone Call=UNVERIFIED callState=$callState")
+                        req.copy(isVerified = false, verificationDetails = "Phone call intent dispatched to '$recipient' ($cleanNum), but active call connection state is $callState.")
+                    }
+                } else if (contactStep?.output?.contains("Permission", ignoreCase = true) == true || callStep?.output?.contains("Permission", ignoreCase = true) == true) {
+                    Log.i("ACE_VERIFY", "ACE_VERIFY: Make Phone Call=UNVERIFIED reason=permission_missing")
+                    req.copy(isVerified = false, verificationDetails = "Phone call blocked: required permission missing.")
+                } else if (!isNumberValid) {
+                    Log.i("ACE_VERIFY", "ACE_VERIFY: Make Phone Call=UNVERIFIED reason=invalid_number")
+                    req.copy(isVerified = false, verificationDetails = "Phone call unverified: recipient phone number unresolved or invalid.")
                 } else {
                     Log.i("ACE_VERIFY", "ACE_VERIFY: Make Phone Call=UNVERIFIED reason=step_incomplete")
-                    req.copy(isVerified = false, verificationDetails = "Phone call capability unverified: contact or dialer step incomplete.")
+                    req.copy(isVerified = false, verificationDetails = "Phone call capability unverified: contact lookup or call step incomplete.")
+                }
+            }
+            "req_1_phone_dial" -> {
+                Log.i("ACE_VERIFY", "ACE_VERIFY: phone_dial requirement handler")
+                val dialStep = steps.firstOrNull { it.capabilityId == "phone_dialer" }
+                val dialerOpened = accumulatedOutputs["dialerOpened"] == "true"
+                val recipient = accumulatedOutputs["contactName"] ?: accumulatedOutputs["recipient"] ?: "contact"
+                val phoneNumber = accumulatedOutputs["phoneNumber"] ?: ""
+                
+                if (dialStep?.isComplete == true && dialerOpened) {
+                    Log.i("ACE_VERIFY", "ACE_VERIFY: Make Phone Dial=VERIFIED")
+                    req.copy(isVerified = true, verificationDetails = "Phone dialer opened for '$recipient' ($phoneNumber) successfully.")
+                } else {
+                    Log.i("ACE_VERIFY", "ACE_VERIFY: Make Phone Dial=UNVERIFIED")
+                    req.copy(isVerified = false, verificationDetails = "Phone dialer step incomplete or unverified.")
                 }
             }
             "req_1_flashlight" -> {
@@ -369,19 +420,19 @@ class AgentExecutor(private val context: Context?) {
                 }
             }
             "req_2_search" -> {
-                // Search requirement: check if it was attempted and whether it succeeded or is blocked by accessibility
                 val textTyped = accumulatedOutputs["textTyped"] == "true"
+                val searchCompleted = steps.any { it.isComplete && (it.capabilityId == "youtube_search" || it.capabilityId == "web_search" || it.capabilityId == "ui_type") }
                 val requiresAccessibility = accumulatedOutputs["requiresAccessibility"] == "true"
-                val searchTerm = accumulatedOutputs["text"] ?: "search term"
+                val searchTerm = accumulatedOutputs["query"] ?: accumulatedOutputs["text"] ?: "search term"
+                val appTarget = accumulatedOutputs["targetApp"] ?: accumulatedOutputs["appName"] ?: "app"
                 
-                Log.i("ACE_VERIFY", "ACE_VERIFY: search handler textTyped=$textTyped requiresAccessibility=$requiresAccessibility")
+                Log.i("ACE_VERIFY", "ACE_VERIFY: search handler textTyped=$textTyped searchCompleted=$searchCompleted appTarget=$appTarget")
                 
-                if (textTyped) {
-                    Log.i("ACE_VERIFY", "ACE_VERIFY: search=VERIFIED term=$searchTerm")
-                    req.copy(isVerified = true, verificationDetails = "Searched for '$searchTerm' in app.")
+                if (textTyped || searchCompleted) {
+                    Log.i("ACE_VERIFY", "ACE_VERIFY: search=VERIFIED term=$searchTerm targetApp=$appTarget")
+                    req.copy(isVerified = true, verificationDetails = "Searched for '$searchTerm' on $appTarget.")
                 } else if (requiresAccessibility) {
                     Log.i("ACE_VERIFY", "ACE_VERIFY: search=BLOCKED reason=accessibility_required")
-                    // Return unverified but include info that it's blocked by accessibility
                     req.copy(isVerified = false, verificationDetails = "Search requires ACE Accessibility Service. Enable it in Accessibility Settings.")
                 } else {
                     Log.i("ACE_VERIFY", "ACE_VERIFY: search=UNVERIFIED")
@@ -449,6 +500,63 @@ class AgentExecutor(private val context: Context?) {
                     req.copy(isVerified = false, verificationDetails = "Sent message unverified in target chat.")
                 }
             }
+            "req_1_system_mobile_data" -> {
+                val step = steps.firstOrNull { it.capabilityId == "system_mobile_data" }
+                val opened = accumulatedOutputs["mobileDataOpened"] == "true" || accumulatedOutputs["userActionRequired"] == "true"
+                val changed = accumulatedOutputs["mobileDataChanged"] == "true"
+                if (step?.isComplete == true && (opened || changed)) {
+                    req.copy(isVerified = true, verificationDetails = if (changed) "Mobile data toggled successfully." else "Mobile data settings panel opened. Please adjust the switch.")
+                } else {
+                    req.copy(isVerified = false, verificationDetails = "Mobile data operation unverified.")
+                }
+            }
+            "req_1_system_wifi" -> {
+                val step = steps.firstOrNull { it.capabilityId == "system_wifi" }
+                val changed = accumulatedOutputs["wifiChanged"] == "true"
+                val opened = accumulatedOutputs["wifiOpened"] == "true"
+                if (step?.isComplete == true && (changed || opened)) {
+                    req.copy(isVerified = true, verificationDetails = if (changed) "Wi-Fi state change verified." else "Wi-Fi settings panel opened.")
+                } else {
+                    req.copy(isVerified = false, verificationDetails = "Wi-Fi operation unverified.")
+                }
+            }
+            "req_1_system_bluetooth" -> {
+                val step = steps.firstOrNull { it.capabilityId == "system_bluetooth" }
+                val changed = accumulatedOutputs["bluetoothChanged"] == "true"
+                val opened = accumulatedOutputs["bluetoothOpened"] == "true"
+                if (step?.isComplete == true && (changed || opened)) {
+                    req.copy(isVerified = true, verificationDetails = if (changed) "Bluetooth state change verified." else "Bluetooth settings panel opened.")
+                } else {
+                    req.copy(isVerified = false, verificationDetails = "Bluetooth operation unverified.")
+                }
+            }
+            "req_1_system_volume" -> {
+                val step = steps.firstOrNull { it.capabilityId == "system_volume" }
+                val changed = accumulatedOutputs["volumeChanged"] == "true"
+                if (step?.isComplete == true && changed) {
+                    req.copy(isVerified = true, verificationDetails = "Volume adjustment verified.")
+                } else {
+                    req.copy(isVerified = false, verificationDetails = "Volume adjustment unverified.")
+                }
+            }
+            "req_1_system_brightness" -> {
+                val step = steps.firstOrNull { it.capabilityId == "system_brightness" }
+                val changed = accumulatedOutputs["brightnessChanged"] == "true"
+                if (step?.isComplete == true && changed) {
+                    req.copy(isVerified = true, verificationDetails = "Screen brightness adjustment verified.")
+                } else {
+                    req.copy(isVerified = false, verificationDetails = "Screen brightness adjustment unverified.")
+                }
+            }
+            "req_1_system_airplane_mode" -> {
+                val step = steps.firstOrNull { it.capabilityId == "system_airplane_mode" }
+                val opened = accumulatedOutputs["airplaneModeOpened"] == "true"
+                if (step?.isComplete == true && opened) {
+                    req.copy(isVerified = true, verificationDetails = "Airplane mode settings opened.")
+                } else {
+                    req.copy(isVerified = false, verificationDetails = "Airplane mode operation unverified.")
+                }
+            }
             else -> {
                 val singleStepCompleted = steps.size == 1 && steps[0].isComplete
                 val stepMatched = singleStepCompleted || steps.any { step ->
@@ -463,21 +571,67 @@ class AgentExecutor(private val context: Context?) {
         }
     }
 
+    private fun validatePlanGoalDomainMatch(goal: String, steps: List<TaskStep>): String? {
+        val goalLower = goal.lowercase().trim()
+        val isSystemGoal = goalLower.contains("mobile data") ||
+                goalLower.contains("wifi") || goalLower.contains("wi-fi") ||
+                goalLower.contains("bluetooth") || goalLower.contains("flashlight") ||
+                goalLower.contains("torch") || goalLower.contains("volume") ||
+                goalLower.contains("brightness") || goalLower.contains("airplane mode") ||
+                goalLower.contains("battery")
+
+        val isAlarmGoal = goalLower.contains("alarm") || goalLower.contains("timer") || goalLower.contains("clock")
+
+        if (isAlarmGoal) {
+            val illegalStep = steps.firstOrNull { step ->
+                val cap = step.capabilityId.lowercase()
+                val targetApp = (step.inputParams["appName"] ?: step.inputParams["targetApp"] ?: step.inputParams["app"] ?: "").lowercase()
+                cap == "media_playback" || cap == "play_media" || targetApp == "spotify" || targetApp.contains("spotify")
+            }
+            if (illegalStep != null) {
+                val appName = illegalStep.inputParams["appName"] ?: illegalStep.inputParams["targetApp"] ?: "Spotify"
+                Log.e("ACE_SAFETY", "ACE_SAFETY: PLAN_REJECTED! Alarm goal '$goal' illegally attempted to execute media/app action '${illegalStep.capabilityId}' ($appName).")
+                return "Plan rejected: Alarm goal '$goal' cannot execute media or Spotify actions (${illegalStep.capabilityId})."
+            }
+        }
+
+        if (isSystemGoal) {
+            val appOpenStep = steps.firstOrNull { it.capabilityId == "ui_open_app" }
+            if (appOpenStep != null) {
+                val appName = (appOpenStep.inputParams["appName"] ?: appOpenStep.inputParams["targetApp"] ?: "unknown").lowercase()
+                if (!goalLower.contains("open $appName") && !goalLower.contains("launch $appName")) {
+                    Log.e("ACE_SAFETY", "ACE_SAFETY: PLAN_REJECTED! System goal '$goal' illegally attempted to open unrelated application '$appName'.")
+                    return "Plan rejected: System goal '$goal' cannot execute unrelated app step 'ui_open_app' ($appName)."
+                }
+            }
+        }
+        return null
+    }
+
     private suspend fun executeCapabilityStep(step: TaskStep, task: AgentTask, stepNumber: Int = 1): ActionResult {
-        Log.i("ACE_EXECUTOR", "ACE_EXECUTOR: step=$stepNumber action=${step.capabilityId} status=STARTED")
-        Log.i("ACE_EXECUTOR", "ACE_EXECUTOR: step=$stepNumber (${step.id})")
-        Log.i("ACE_EXECUTOR", "ACE_EXECUTOR: action=${step.capabilityId}")
-        Log.i("ACE_EXECUTOR", "ACE_EXECUTOR: status=STARTED")
+        val genId = if (step.taskGenerationId != 0L) step.taskGenerationId else task.taskGenerationId
+        if (genId != 0L && !AceTaskSessionManager.isCurrentGeneration(genId)) {
+            Log.w("ACE_TASK", "ACE_TASK: STALE_REJECTED eventGeneration=$genId currentGeneration=${AceTaskSessionManager.getCurrentGenerationId()}")
+            return ActionResult(status = ActionResultStatus.FAILED, message = "Stale step rejected due to session mismatch.")
+        }
+
+        val targetApp = step.inputParams["targetApp"] ?: step.inputParams["appName"] ?: "none"
+        Log.i("ACE_TASK", "ACE_TASK: generation=$genId goal=\"${task.goal}\"")
+        Log.i("ACE_PLAN", "ACE_PLAN: generation=$genId intent=${step.capabilityId} targetApp=$targetApp")
+        Log.i("ACE_ACTION", "ACE_ACTION: generation=$genId action=${step.capabilityId}")
+        Log.i("ACE_EXECUTOR", "ACE_EXECUTOR: step=$stepNumber action=${step.capabilityId} status=STARTED generation=$genId")
 
         val actionResult = actionEngine.executeAction(step, task)
 
+        val evidence = actionResult.outputData["evidence"] ?: actionResult.message
+        Log.i("ACE_VERIFY", "ACE_VERIFY: generation=$genId goal=\"${task.goal}\" action=${step.capabilityId} evidence=\"$evidence\"")
+        Log.i("ACE_RESULT", "ACE_RESULT: generation=$genId status=${actionResult.status}")
+
         if (actionResult.status == ActionResultStatus.SUCCESS) {
             Log.i("ACE_EXECUTOR", "ACE_EXECUTOR: step=$stepNumber action=${step.capabilityId} status=SUCCESS")
-            Log.i("ACE_EXECUTOR", "ACE_EXECUTOR: status=SUCCESS")
             Log.i("ACE_EXECUTOR", "ACE_EXECUTOR: result=${actionResult.message}")
         } else {
             Log.e("ACE_EXECUTOR", "ACE_EXECUTOR: step=$stepNumber action=${step.capabilityId} status=${actionResult.status}")
-            Log.e("ACE_EXECUTOR", "ACE_EXECUTOR: status=${actionResult.status}")
             Log.e("ACE_EXECUTOR", "ACE_EXECUTOR: reason=${actionResult.error ?: actionResult.message}")
         }
 

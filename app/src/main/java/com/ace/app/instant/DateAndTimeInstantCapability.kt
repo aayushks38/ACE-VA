@@ -12,6 +12,10 @@ class DateAndTimeInstantCapability : InstantCapability {
 
     override fun confidence(command: String): Float {
         val lower = command.lowercase().trim()
+            .replace(Regex("""[\?!,\.]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
         if (lower.startsWith("open ") || lower.startsWith("launch ") || lower.startsWith("set alarm") ||
             lower.startsWith("set timer") || lower.startsWith("help ") || lower.contains("strategy") ||
             lower.contains("revision") || lower.contains("create") || lower.contains("explain")) {
@@ -21,7 +25,8 @@ class DateAndTimeInstantCapability : InstantCapability {
         val words = lower.split("\\s+".toRegex())
         if (words.size > 15) return 0.0f
 
-        val isDateQuery = lower.contains("date") || lower.contains("time is it") || lower.contains("day is it") ||
+        val isDateQuery = lower.contains("date") || lower.contains("time is it") || lower.contains("is the time") ||
+                lower.contains("the time") || lower.contains("current time") || lower.contains("day is it") ||
                 lower.contains("day will tomorrow be") || lower.contains("day will it be tomorrow") ||
                 lower.contains("what month") || lower.contains("what year") || lower.contains("yesterday") || lower.contains("what day")
 

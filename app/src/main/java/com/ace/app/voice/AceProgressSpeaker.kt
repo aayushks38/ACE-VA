@@ -53,6 +53,21 @@ object AceProgressSpeaker {
     // ── Public API ───────────────────────────────────────────────────────────
 
     /**
+     * Speak a short task-acceptance acknowledgement ("On it.") immediately after task is accepted.
+     * Silent for simple fast tasks (calculations, date/time, battery, etc.).
+     */
+    fun speakTaskAccepted(goal: String, isFastTask: Boolean, generationId: Long) {
+        if (!isCurrentGeneration(generationId)) return
+        if (isFastTask) {
+            Log.d(TAG, "ACE_VOICE: task_accepted fast_task=true (silent)")
+            return
+        }
+        val phrase = "On it."
+        Log.i(TAG, "ACE_VOICE: task_accepted fast_task=false phrase=\"$phrase\" generation=$generationId")
+        doSpeak(phrase, generationId)
+    }
+
+    /**
      * Speak a short phrase announcing that an action is about to start.
      * Only fires for multi-step / meaningful milestones.
      */
@@ -110,12 +125,32 @@ object AceProgressSpeaker {
     private fun doSpeak(phrase: String, generationId: Long) {
         if (!isCurrentGeneration(generationId)) return
         val vm = voiceManager ?: return
-        lastSpokenPhrase = phrase
+        val sanitized = sanitizeForTts(phrase)
+        if (sanitized.isBlank()) return
+        lastSpokenPhrase = sanitized
         lastSpokenAtMs = System.currentTimeMillis()
-        vm.speak(phrase, generationId) { currentGenerationId }
+        vm.speak(sanitized, generationId) { currentGenerationId }
     }
 
-    private fun isCurrentGeneration(id: Long) = id == currentGenerationId
+    private fun sanitizeForTts(raw: String): String {
+        var clean = raw.trim()
+        if (clean.isBlank()) return ""
+        if (clean.startsWith("{") || clean.startsWith("[")) return "Done."
+        clean = clean.replace(Regex("""\+?\d{7,15}"""), "")
+        clean = clean.replace(Regex("""com\.[a-z0-9\._]+"""), "")
+        clean = clean.replace(Regex("""https?://\S+"""), "")
+        clean = clean.replace(Regex("""(phone_call|contact_lookup|ui_open_app|system_wifi|system_mobile_data|system_bluetooth)"""), "")
+        return clean.trim().replace(Regex("""\s+"""), " ")
+    }
+
+    private fun isCurrentGeneration(id: Long): Boolean {
+        if (id == 0L) return true
+        val matches = id == currentGenerationId
+        if (!matches) {
+            Log.w(TAG, "ACE_TASK: STALE_REJECTED eventGeneration=$id currentGeneration=$currentGenerationId")
+        }
+        return matches
+    }
 
     // ── Phrase mapping ───────────────────────────────────────────────────────
 
@@ -195,6 +230,12 @@ object AceProgressSpeaker {
             // ── Instant capabilities — no progress narration ─────────────────
             id.contains("battery") -> null
             id.contains("flashlight") || id.contains("torch") -> null
+            id.contains("system_mobile_data") || id.contains("mobile_data") -> null
+            id.contains("system_wifi") || id.contains("wifi") -> null
+            id.contains("system_bluetooth") || id.contains("bluetooth") -> null
+            id.contains("system_volume") || id.contains("volume") -> null
+            id.contains("system_brightness") || id.contains("brightness") -> null
+            id.contains("system_airplane_mode") || id.contains("airplane_mode") -> null
             id.contains("time") || id.contains("date") -> null
             id.contains("storage") || id.contains("memory") -> null
             id.contains("text_reasoning") -> null

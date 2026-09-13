@@ -61,12 +61,9 @@ fun ModelSetupScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
-        if (!state.isReady && state.errorMessage == null) {
-            try {
-                documentPickerLauncher.launch(arrayOf("*/*"))
-            } catch (_: Exception) {}
-        }
+    val isDiscoveredAvailable = remember {
+        val discovery = com.ace.app.brain.model.ModelRepository.discoverModel(context)
+        discovery.state == com.ace.app.brain.model.ModelDiscoveryState.MODEL_FOUND
     }
 
     AceBackground {
@@ -166,17 +163,43 @@ fun ModelSetupScreen(
                             verticalArrangement = Arrangement.spacedBy(14.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            GlowButton(
-                                text = "Select Existing Model File",
+                            if (isDiscoveredAvailable) {
+                                GlowButton(
+                                    text = "Initialize Detected Model (GGUF)",
+                                    onClick = {
+                                        viewModel.initializeDiscoveredModel(context)
+                                    },
+                                    glowIntensity = 0.8f,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+
+                                Text(
+                                    text = "Found existing Gemma model file in Downloads directory.",
+                                    color = SuccessGreen,
+                                    fontSize = 11.sp,
+                                    textAlign = TextAlign.Center
+                                )
+
+                                Spacer(modifier = Modifier.height(4.dp))
+                            }
+
+                            OutlinedButton(
                                 onClick = {
-                                    documentPickerLauncher.launch(arrayOf("*/*"))
+                                    try {
+                                        documentPickerLauncher.launch(arrayOf("*/*"))
+                                    } catch (_: Exception) {}
                                 },
-                                glowIntensity = 0.6f,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Purple)
+                            ) {
+                                Text("Select Other Model File", color = Ink, fontWeight = FontWeight.SemiBold)
+                            }
 
                             Text(
-                                text = "Choose a .gguf model file already downloaded to your device Downloads or storage.",
+                                text = "Choose a .gguf model file already downloaded to your device storage.",
                                 color = Muted,
                                 fontSize = 11.sp,
                                 textAlign = TextAlign.Center
@@ -190,9 +213,9 @@ fun ModelSetupScreen(
                                     .fillMaxWidth()
                                     .height(50.dp),
                                 shape = RoundedCornerShape(14.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Purple)
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Purple.copy(alpha = 0.5f))
                             ) {
-                                Text("Download Gemma Model (GGUF)", color = Ink, fontWeight = FontWeight.SemiBold)
+                                Text("Download Gemma Model (GGUF)", color = Muted, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }

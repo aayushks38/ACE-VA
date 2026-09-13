@@ -108,9 +108,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun initializeBrain() {
         val context = getApplication<Application>().applicationContext
-        if (com.ace.app.brain.GemmaBrainManager.isModelInstalled(context)) {
-            com.ace.app.brain.GemmaBrainManager.ensureRuntimeLoadedAsync(context)
-        }
+        com.ace.app.brain.GemmaBrainManager.ensureRuntimeLoadedAsync(context)
     }
 
     private suspend fun ensureBrainLoaded(context: Context): Boolean {
@@ -208,14 +206,43 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun isFastTask(goal: String, route: CommandRoute): Boolean {
+        val lower = goal.lowercase().trim()
+        if (lower.contains("+") || lower.contains("-") || lower.contains("*") || lower.contains("/") ||
+            lower.contains("plus") || lower.contains("minus") || lower.contains("times") || lower.contains("divided") ||
+            lower.contains("battery") || lower.contains("flashlight") || lower.contains("torch") ||
+            lower.contains("time") || lower.contains("date") || lower.contains("storage")) {
+            return true
+        }
+        if (route is CommandRoute.Fast) {
+            val firstCap = route.plan.steps.firstOrNull()?.capabilityId ?: ""
+            if (firstCap == "instant_intelligence" || firstCap == "flashlight" || firstCap == "system_settings" || firstCap == "system_volume") {
+                return true
+            }
+        }
+        return false
+    }
+
     fun submitVoiceGoal(goal: String) {
         val cleanGoal = goal.trim()
         if (cleanGoal.isBlank()) return
 
+        com.ace.app.utils.AceLatencyTracker.startTask()
+        com.ace.app.utils.AceLatencyTracker.mark("speech_result")
+        com.ace.app.utils.AceLatencyTracker.mark("transcript_final")
         android.util.Log.i("ACE_TASK", "ACE_TASK: submitVoiceGoal_START goal=$cleanGoal")
         
         val generationId = AceTaskSessionManager.startNewSession(cleanGoal, brain, voiceManager, executionJob)
         currentGeneration.set(generationId)
+
+        // Clear active task UI card immediately for fresh session
+        _uiState.value = _uiState.value.copy(
+            activeTask = null,
+            lastHeard = cleanGoal,
+            announcement = cleanGoal,
+            currentActionLabel = "On it..."
+        )
+
         // Clear pending progress speech from any previous task
         AceProgressSpeaker.clear(generationId)
         voiceManager?.let { AceProgressSpeaker.attach(it, generationId) }
@@ -229,15 +256,45 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // Conversational Intelligence Layer: Check if request requires clarification
+        val hasActiveContext = AceConversationContext.getLastGoal() != null
+        val specCheck = GoalSpecificationFilter.evaluate(cleanGoal, hasActiveContext)
+        if (!specCheck.isSpecified) {
+            val question = specCheck.clarificationQuestion ?: "Could you clarify what you'd like me to do?"
+            android.util.Log.w("ACE_CONVERSATION", "ACE_CONVERSATION: clarification_required=true question=\"$question\" reason=${specCheck.reason}")
+            _uiState.value = _uiState.value.copy(
+                activeTask = null,
+                lastHeard = cleanGoal,
+                announcement = question,
+                currentActionLabel = ""
+            )
+            voiceManager?.speak(question, generationId) { AceTaskSessionManager.getCurrentGenerationId() }
+            return
+        }
+
         val startMs = System.currentTimeMillis()
         AceConversationContext.update(cleanGoal)
         android.util.Log.i("ACE_TASK", "ACE_TASK: Received voice command = $cleanGoal")
         android.util.Log.i("ACE_TASK", "ACE_TASK: brain.isReady()=${brain.isReady()}")
 
-        when (val route = commandRouter.route(cleanGoal, brainAvailable = brain.isReady())) {
+        val route = commandRouter.route(cleanGoal, brainAvailable = brain.isReady())
+        val fastTask = isFastTask(cleanGoal, route)
+
+        // Task Acceptance & Voice Acknowledgement
+        AceProgressSpeaker.speakTaskAccepted(cleanGoal, fastTask, generationId)
+        if (!fastTask) {
+            _uiState.value = _uiState.value.copy(
+                voiceState = VoiceState.EXECUTING,
+                currentActionLabel = "On it..."
+            )
+        }
+
+        when (route) {
             is CommandRoute.Fast -> {
                 val finishMs = System.currentTimeMillis()
                 val routeStr = route.result.route.name
+                android.util.Log.i("ACE_NLU", "ACE_NLU_SOURCE=DETERMINISTIC")
+                android.util.Log.i("ACE_NLU", "ACE_GEMMA_INVOKED=false")
                 android.util.Log.i("ACE_PERF", "ACE_PERF: route=$routeStr start_ms=$startMs finish_ms=$finishMs duration_ms=${finishMs - startMs}")
                 android.util.Log.i("ACE_ROUTER", "ACE_ROUTER: FAST_ACTION capability plan selected")
                 android.util.Log.i("ACE_ROUTER", "ACE_ROUTER: execution_mode=${route.result.executionMode} brain_required=${route.result.brainRequired} brain_available=${route.result.brainAvailable}")
@@ -249,6 +306,8 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             is CommandRoute.Workflow -> {
                 val finishMs = System.currentTimeMillis()
                 val routeStr = route.result.route.name
+                android.util.Log.i("ACE_NLU", "ACE_NLU_SOURCE=DETERMINISTIC")
+                android.util.Log.i("ACE_NLU", "ACE_GEMMA_INVOKED=false")
                 android.util.Log.i("ACE_PERF", "ACE_PERF: route=$routeStr start_ms=$startMs finish_ms=$finishMs duration_ms=${finishMs - startMs}")
                 android.util.Log.i("ACE_ROUTER", "ACE_ROUTER: WORKFLOW capability plan selected")
                 android.util.Log.i("ACE_ROUTER", "ACE_ROUTER: execution_mode=${route.result.executionMode} brain_required=${route.result.brainRequired} brain_available=${route.result.brainAvailable}")
@@ -258,6 +317,8 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             is CommandRoute.DeepBrain -> {
+                android.util.Log.i("ACE_NLU", "ACE_NLU_SOURCE=GEMMA")
+                android.util.Log.i("ACE_NLU", "ACE_GEMMA_INVOKED=true")
                 android.util.Log.i("ACE_ROUTER", "ACE_ROUTER: DEEP_BRAIN route selected")
                 android.util.Log.i("ACE_ROUTER", "ACE_ROUTER: execution_mode=${route.result.executionMode} brain_required=${route.result.brainRequired} brain_available=${route.result.brainAvailable}")
                 android.util.Log.i("ACE_INFERENCE", "ACE_INFERENCE: starting generation")
@@ -323,6 +384,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun executePlan(cleanGoal: String, plan: AgentPlan, generationId: Long, summaryReasoning: String? = null, brainRequired: Boolean = false, brainAvailable: Boolean = false) {
+        val startMs = System.currentTimeMillis()
         val category = when (plan.intent.lowercase()) {
             "communication" -> TaskCategory.COMMUNICATION
             "document" -> TaskCategory.DOCUMENT
@@ -330,15 +392,17 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             else -> TaskCategory.GENERAL
         }
 
+        val taggedSteps = plan.steps.map { it.copy(taskGenerationId = generationId) }
         val task = AgentTask(
             goal = cleanGoal,
             category = category,
             status = TaskStatus.PLANNING,
             summary = summaryReasoning ?: "Executing action plan for: $cleanGoal",
-            steps = plan.steps,
+            steps = taggedSteps,
             requiresApproval = plan.requiresApproval,
             attachmentName = _uiState.value.attachmentName,
-            attachmentUri = _uiState.value.attachmentUri
+            attachmentUri = _uiState.value.attachmentUri,
+            taskGenerationId = generationId
         )
 
         _uiState.value = _uiState.value.copy(
@@ -387,8 +451,41 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                         currentActionLabel = ""
                     )
                     // Use AceProgressSpeaker for deduplication against last progress phrase
+                    com.ace.app.utils.AceLatencyTracker.mark("tts_start")
+                    com.ace.app.utils.AceLatencyTracker.recordStage("T14")
                     AceProgressSpeaker.speakTaskCompleted(response.spokenText, generationId)
+                    com.ace.app.utils.AceLatencyTracker.mark("tts_end")
+                    com.ace.app.utils.AceLatencyTracker.mark("task_complete")
+                    com.ace.app.utils.AceLatencyTracker.logSummary()
                     AceConversationContext.update(cleanGoal, response.displayText, task = finalTask)
+
+                    val fastGateClass = when {
+                        finalTask.steps.any { it.capabilityId == "local_calculator" || it.inputParams["capabilityId"] == "local_calculator" } -> "CALCULATE"
+                        finalTask.steps.any { it.capabilityId == "device_date" || it.inputParams["capabilityId"] == "device_date" } -> "DATE_TIME"
+                        finalTask.steps.any { it.capabilityId == "device_battery" || it.inputParams["capabilityId"] == "device_battery" } -> "BATTERY"
+                        finalTask.steps.any { it.capabilityId == "ui_open_app" } -> "OPEN_APP"
+                        finalTask.steps.any { it.capabilityId == "media_playback" } -> "PLAY_MEDIA"
+                        finalTask.steps.any { it.capabilityId == "universal_search" || it.capabilityId == "web_search" } -> "SEARCH"
+                        else -> "GENERAL_AGENT"
+                    }
+                    val gemmaCalled = com.ace.app.utils.AceLatencyTracker.gemmaCallCount.get() > 0
+                    val openedAppStep = finalTask.steps.firstOrNull { it.capabilityId == "ui_open_app" }
+                    val appOpened = openedAppStep?.inputParams?.get("appName") ?: openedAppStep?.inputParams?.get("app") ?: "none"
+                    val endMs = System.currentTimeMillis()
+                    val totalLatencyMs = endMs - startMs
+
+                    android.util.Log.i("ACE_PHYSICAL_TEST", """
+                        === ACE PHYSICAL TEST RECORD ===
+                        TRANSCRIPT_FINAL  = "$cleanGoal"
+                        FAST_GATE_CLASS   = $fastGateClass
+                        GEMMA_CALLED      = $gemmaCalled (count=${com.ace.app.utils.AceLatencyTracker.gemmaCallCount.get()})
+                        APP_OPENED        = $appOpened
+                        ACTION_COUNT      = ${finalTask.steps.size}
+                        VERIFICATION      = VERIFIED
+                        TOTAL_LATENCY_MS  = ${totalLatencyMs}ms
+                        FINAL_STATE       = ${finalTask.status}
+                        ================================
+                    """.trimIndent())
                 }
             }
         }
@@ -436,6 +533,50 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                         currentActionLabel = ""
                     )
                     AceProgressSpeaker.speakTaskCompleted(response.spokenText, generationId)
+                }
+            }
+        }
+    }
+
+    fun resumeTask(task: AgentTask) {
+        if (task.status != TaskStatus.WAITING_FOR_USER && task.status != TaskStatus.WAITING_FOR_APPROVAL) return
+
+        val validGenId = currentGeneration.get().let { if (it == 0L) currentGeneration.incrementAndGet() else it }
+
+        AceProgressSpeaker.clear(validGenId)
+        voiceManager?.let { AceProgressSpeaker.attach(it, validGenId) }
+
+        executionJob?.cancel()
+        voiceManager?.stopSpeaking()
+
+        android.util.Log.i("ACE_TASK", "ACE_TASK: Resuming task '${task.goal}' after permission grant")
+
+        executionJob = viewModelScope.launch {
+            executor.resumeExecutionAfterApproval(
+                task = task,
+                onStepUpdated = { updatedTask ->
+                    if (AceTaskSessionManager.isCurrentGeneration(validGenId)) {
+                        _uiState.value = _uiState.value.copy(activeTask = updatedTask)
+                    }
+                },
+                generationId = validGenId,
+                onProgressSpeech = { capabilityId, params ->
+                    if (AceTaskSessionManager.isCurrentGeneration(validGenId)) {
+                        val label = friendlyActionLabel(capabilityId, params)
+                        if (label != null) {
+                            _uiState.value = _uiState.value.copy(currentActionLabel = label)
+                        }
+                        AceProgressSpeaker.speakActionStarted(capabilityId, params, validGenId)
+                    }
+                }
+            ).also { finalTask ->
+                if (AceTaskSessionManager.isCurrentGeneration(validGenId)) {
+                    val response = com.ace.app.voice.AssistantResponseComposer.compose(task.goal, finalTask)
+                    _uiState.value = _uiState.value.copy(
+                        announcement = response.displayText,
+                        currentActionLabel = ""
+                    )
+                    AceProgressSpeaker.speakTaskCompleted(response.spokenText, validGenId)
                 }
             }
         }

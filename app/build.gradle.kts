@@ -24,6 +24,8 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++17"
+                arguments += "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
+                arguments += "-DCMAKE_BUILD_PARALLEL_LEVEL=8"
             }
         }
     }
@@ -41,6 +43,20 @@ android {
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+            enableV4Signing = true
+        }
+        create("release") {
+            storeFile = file("release.keystore")
+            storePassword = "acepassword123"
+            keyAlias = "acekey"
+            keyPassword = "acepassword123"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+            enableV4Signing = true
         }
     }
 
@@ -50,10 +66,17 @@ android {
         }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
         }
     }
 

@@ -8,5 +8,6 @@ data class AgentPlan(
     val steps: List<TaskStep>,
     val requiresApproval: Boolean = false,
     val clarificationNeeded: Boolean = false,
-    val clarificationQuestion: String? = null
+    val clarificationQuestion: String? = null,
+    val taskGenerationId: Long = 0L
 )

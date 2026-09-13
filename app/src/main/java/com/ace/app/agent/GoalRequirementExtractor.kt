@@ -75,17 +75,30 @@ object GoalRequirementExtractor {
         }
 
         // 9. Phone call / dial intent
-        if (lower.startsWith("call ") || lower.contains(" call ") || lower.contains("dial ") || lower.contains("phone ")) {
+        if (lower.startsWith("call ") || lower.contains(" call ")) {
+            actions.add("PHONE_CALL")
+        } else if (lower.contains("dial ") || lower.contains("phone ")) {
             actions.add("PHONE_DIAL")
         }
 
-        // 10. System settings intent
-        if (lower.contains("settings") || lower.contains("wifi") || lower.contains("bluetooth") || lower.contains("brightness")) {
+        // 10. System settings / device control intent
+        if (lower.contains("mobile data") || lower.contains("cellular data")) {
+            actions.add("SYSTEM_MOBILE_DATA")
+        } else if (lower.contains("wifi") || lower.contains("wi-fi")) {
+            actions.add("SYSTEM_WIFI")
+        } else if (lower.contains("bluetooth")) {
+            actions.add("SYSTEM_BLUETOOTH")
+        } else if (lower.contains("airplane mode") || lower.contains("flight mode")) {
+            actions.add("SYSTEM_AIRPLANE_MODE")
+        } else if (lower.contains("volume")) {
+            actions.add("SYSTEM_VOLUME")
+        } else if (lower.contains("brightness") || lower.contains("screen brighter") || lower.contains("dim screen")) {
+            actions.add("SYSTEM_BRIGHTNESS")
+        } else if (lower.contains("settings")) {
             actions.add("SYSTEM_SETTINGS")
         }
 
         if (actions.isEmpty()) {
-            // GENERAL_ACTION is a wildcard — any non-empty plan will satisfy it
             actions.add("GENERAL_ACTION")
         }
 
@@ -111,7 +124,8 @@ object GoalRequirementExtractor {
             (req == "GENERAL_ACTION" && planned.isNotEmpty()) ||
             // Instant/deterministic capabilities always satisfy themselves
             (req == "FLASHLIGHT" && planned.any { it == "FLASHLIGHT" || it.contains("FLASHLIGHT") }) ||
-            (req == "PHONE_DIAL" && planned.any { it.contains("PHONE") || it.contains("DIAL") || it == "PHONE_DIAL" }) ||
+            (req == "PHONE_CALL" && planned.any { it == "PHONE_CALL" }) ||
+            (req == "PHONE_DIAL" && planned.any { it == "PHONE_DIAL" || it == "PHONE_CALL" }) ||
             (req == "SYSTEM_SETTINGS" && planned.any { it.contains("SETTINGS") || it.contains("SYSTEM") })
         }
 
@@ -142,11 +156,18 @@ object GoalRequirementExtractor {
         return when (capabilityId.lowercase().trim()) {
             "app.launch", "ui_open_app", "open_app" -> "OPEN_APP"
             "web.open", "web_open_url", "open_url" -> "OPEN_URL"
-            "web.search", "web_search", "search" -> "SEARCH"
+            "web.search", "web_search", "youtube_search", "youtube.search", "universal_search", "search_in_app", "search" -> "SEARCH"
             "ui.type", "ui_type", "type_text", "fill_field" -> "TYPE_TEXT"
             "ui.find", "ui.click", "ui_click", "click", "select", "accessibility.execute" -> "CLICK"
             "ui.scroll", "ui_scroll", "scroll" -> "SCROLL"
+            "system_mobile_data" -> "SYSTEM_MOBILE_DATA"
+            "system_wifi" -> "SYSTEM_WIFI"
+            "system_bluetooth" -> "SYSTEM_BLUETOOTH"
+            "system_volume" -> "SYSTEM_VOLUME"
+            "system_brightness" -> "SYSTEM_BRIGHTNESS"
+            "system_airplane_mode" -> "SYSTEM_AIRPLANE_MODE"
             "device.open_settings", "system_settings" -> "SYSTEM_SETTINGS"
+            "phone.call", "phone_call" -> "PHONE_CALL"
             "phone.dial", "phone_dialer" -> "PHONE_DIAL"
             "contact.lookup", "contact_lookup" -> "CONTACT_LOOKUP"
             "file.find", "file.open", "file_manager", "file_discovery", "file_discover" -> "FILE_DISCOVER"

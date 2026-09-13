@@ -12,6 +12,8 @@ class BatteryInstantCapability : InstantCapability {
 
     override fun confidence(command: String): Float {
         val lower = command.lowercase().trim()
+            .replace(Regex("""[\?!,\.]"""), " ")
+            .trim()
         if (lower.startsWith("open ") || lower.startsWith("launch ") || lower.contains("help ") || lower.contains("strategy")) {
             return 0.0f
         }

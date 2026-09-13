@@ -43,7 +43,25 @@ object AssistantResponseComposer {
         val cleanDisplayText: String
 
         when {
-            // 1. Media / Share / Smart Delivery Queries — checked FIRST before open/launch
+            // 1. Calculation Queries
+            task.steps.any { it.capabilityId == "local_calculator" || it.inputParams["capabilityId"] == "local_calculator" } ||
+            (rawSource.contains(" = ") && (lowerGoal.contains("+") || lowerGoal.contains("-") || lowerGoal.contains("*") || lowerGoal.contains("/") || lowerGoal.contains("plus") || lowerGoal.contains("minus") || lowerGoal.contains("times") || lowerGoal.contains("divided") || lowerGoal.contains("squared"))) -> {
+                val clean = sanitizeResponseText(rawSource)
+                val spoken = if (clean.contains(" = ")) {
+                    val parts = clean.split(" = ")
+                    val exprSpoken = parts[0].trim()
+                        .replace("*", "times")
+                        .replace("/", "divided by")
+                        .replace("+", "plus")
+                        .replace("-", "minus")
+                        .replace("^ 2", "squared")
+                    "$exprSpoken is ${parts[1].trim()}."
+                } else clean
+                conversationalSpokenText = spoken
+                cleanDisplayText = spoken
+            }
+
+            // 1b. Media / Share / Smart Delivery Queries — checked FIRST before open/launch
             // to ensure "send the latest photo to Ravi on WhatsApp" uses the delivery branch
             (lowerGoal.contains("send") || lowerGoal.contains("share")) -> {
                 val clean = sanitizeResponseText(rawSource)
@@ -81,8 +99,24 @@ object AssistantResponseComposer {
                 cleanDisplayText = if (isOff) "Flashlight turned off." else "Flashlight turned on."
             }
 
+            // 3b. Alarm & Timer Queries
+            lowerGoal.contains("alarm") || lowerGoal.contains("timer") -> {
+                val alarmStep = task.steps.firstOrNull { it.capabilityId == "set_alarm" }
+                val isSuccess = task.status == TaskStatus.COMPLETED || alarmStep?.isComplete == true
+                if (isSuccess) {
+                    val hour = alarmStep?.inputParams?.get("hour") ?: "19"
+                    val min = alarmStep?.inputParams?.get("minute") ?: "00"
+                    val formatted = "${hour.padStart(2, '0')}:${min.padStart(2, '0')}"
+                    conversationalSpokenText = "Alarm set for $formatted."
+                    cleanDisplayText = "Alarm set for $formatted."
+                } else {
+                    conversationalSpokenText = "Could not set alarm."
+                    cleanDisplayText = task.summary.ifBlank { "Could not set alarm." }
+                }
+            }
+
             // 4. App Opening Queries
-            lowerGoal.startsWith("open ") || lowerGoal.startsWith("launch ") || lowerGoal.contains("open ") || lowerGoal.contains("launch ") -> {
+            (lowerGoal.startsWith("open ") || lowerGoal.startsWith("launch ") || lowerGoal.contains("open ") || lowerGoal.contains("launch ")) && !lowerGoal.contains("alarm") -> {
                 val appName = when {
                     lowerGoal.contains("whatsapp") -> "WhatsApp"
                     lowerGoal.contains("settings") -> "Settings"

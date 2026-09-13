@@ -161,23 +161,30 @@ object ModelRepository {
             }
         }
 
-        // 2. Direct check for target E2B file in Download directory
-        val directDefaultFile = File("/storage/emulated/0/Download", DEFAULT_MODEL_FILENAME)
-        if (directDefaultFile.exists() && directDefaultFile.length() >= 500_000_000L) {
-            val mediaUri = queryMediaStoreForModel(context) ?: scanAndGetUri(context, directDefaultFile.absolutePath)
-            val valResult = validateModel(context, mediaUri, directDefaultFile.absolutePath)
-            if (valResult is ModelValidationResult.Success) {
-                Log.e("ACE_MODEL_PATH", "ACE_MODEL_PATH: ${directDefaultFile.absolutePath}")
-                Log.e("ACE_MODEL_SOURCE", "ACE_MODEL_SOURCE: persistent_existing_file")
-                Log.e("ACE_MODEL_COPY", "ACE_MODEL_COPY: skipped")
-                registerModel(context, mediaUri, directDefaultFile.absolutePath, valResult.spec.name)
-                return ModelDiscoveryResult(
-                    state = ModelDiscoveryState.MODEL_FOUND,
-                    uri = mediaUri,
-                    path = directDefaultFile.absolutePath,
-                    sizeBytes = valResult.sizeBytes,
-                    message = "Model found via Download path: ${directDefaultFile.name}"
-                )
+        // 2. Direct check for target E2B file in Download or Download/AceModels directory
+        val directCandidateFiles = listOf(
+            File("/storage/emulated/0/Download/AceModels", DEFAULT_MODEL_FILENAME),
+            File("/storage/emulated/0/Download", DEFAULT_MODEL_FILENAME)
+        )
+        for (directFile in directCandidateFiles) {
+            if (directFile.exists() && directFile.length() >= 500_000_000L) {
+                val mediaUri = queryMediaStoreForModel(context) ?: scanAndGetUri(context, directFile.absolutePath)
+                val valResult = validateModel(context, mediaUri, directFile.absolutePath)
+                if (valResult is ModelValidationResult.Success) {
+                    Log.i("ACE_MODEL_DISCOVERY", "ACE_MODEL_DISCOVERY: DISCOVERED path=${directFile.absolutePath} size=${valResult.sizeBytes}")
+                    Log.i("ACE_MODEL_VALIDATION", "ACE_MODEL_VALIDATION: VALIDATED file=${directFile.name}")
+                    Log.e("ACE_MODEL_PATH", "ACE_MODEL_PATH: ${directFile.absolutePath}")
+                    Log.e("ACE_MODEL_SOURCE", "ACE_MODEL_SOURCE: persistent_existing_file")
+                    Log.e("ACE_MODEL_COPY", "ACE_MODEL_COPY: skipped")
+                    registerModel(context, mediaUri, directFile.absolutePath, valResult.spec.name)
+                    return ModelDiscoveryResult(
+                        state = ModelDiscoveryState.MODEL_FOUND,
+                        uri = mediaUri,
+                        path = directFile.absolutePath,
+                        sizeBytes = valResult.sizeBytes,
+                        message = "Model found via Download path: ${directFile.name}"
+                    )
+                }
             }
         }
 
@@ -186,6 +193,8 @@ object ModelRepository {
         if (mediaStoreUri != null) {
             val valResult = validateModel(context, mediaStoreUri, null)
             if (valResult is ModelValidationResult.Success) {
+                Log.i("ACE_MODEL_DISCOVERY", "ACE_MODEL_DISCOVERY: DISCOVERED via MediaStore uri=$mediaStoreUri")
+                Log.i("ACE_MODEL_VALIDATION", "ACE_MODEL_VALIDATION: VALIDATED MediaStore model")
                 Log.e("ACE_MODEL_PATH", "ACE_MODEL_PATH: /storage/emulated/0/Download/$DEFAULT_MODEL_FILENAME")
                 Log.e("ACE_MODEL_SOURCE", "ACE_MODEL_SOURCE: persistent_existing_file")
                 Log.e("ACE_MODEL_COPY", "ACE_MODEL_COPY: skipped")
@@ -208,6 +217,8 @@ object ModelRepository {
                 val size = pfd.statSize
                 pfd.close()
                 if (size >= 500_000_000L) {
+                    Log.i("ACE_MODEL_DISCOVERY", "ACE_MODEL_DISCOVERY: DISCOVERED via SAF raw URI")
+                    Log.i("ACE_MODEL_VALIDATION", "ACE_MODEL_VALIDATION: VALIDATED SAF raw URI")
                     Log.e("ACE_MODEL_PATH", "ACE_MODEL_PATH: /storage/emulated/0/Download/$DEFAULT_MODEL_FILENAME")
                     Log.e("ACE_MODEL_SOURCE", "ACE_MODEL_SOURCE: persistent_existing_file")
                     Log.e("ACE_MODEL_COPY", "ACE_MODEL_COPY: skipped")
@@ -225,8 +236,9 @@ object ModelRepository {
             Log.w("ACE_MODEL_LOAD", "ACE_MODEL_LOAD: Raw SAF URI check: ${e.message}")
         }
 
-        // 3. Scan Downloads directory for any .gguf files >= 500MB
+        // 5. Scan Downloads directories (including AceModels) for any .gguf files >= 500MB
         val downloadsDirs = listOfNotNull(
+            File("/storage/emulated/0/Download/AceModels"),
             File("/storage/emulated/0/Download"),
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
             context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
@@ -240,6 +252,8 @@ object ModelRepository {
                     if (largestGguf != null && largestGguf.length() >= 500_000_000L) {
                         val valResult = validateModel(context, null, largestGguf.absolutePath)
                         if (valResult is ModelValidationResult.Success) {
+                            Log.i("ACE_MODEL_DISCOVERY", "ACE_MODEL_DISCOVERY: DISCOVERED path=${largestGguf.absolutePath} size=${valResult.sizeBytes}")
+                            Log.i("ACE_MODEL_VALIDATION", "ACE_MODEL_VALIDATION: VALIDATED file=${largestGguf.name}")
                             Log.i("ACE_MODEL_PATH", "ACE_MODEL_PATH: ${largestGguf.absolutePath}")
                             Log.i("ACE_MODEL_SOURCE", "ACE_MODEL_SOURCE: persistent_existing_file")
                             Log.i("ACE_MODEL_COPY", "ACE_MODEL_COPY: skipped")
@@ -255,6 +269,8 @@ object ModelRepository {
                 }
             }
         }
+
+        Log.w("ACE_MODEL_DISCOVERY", "ACE_MODEL_DISCOVERY: FAILED - No GGUF model file discovered")
 
         return ModelDiscoveryResult(
             state = ModelDiscoveryState.MODEL_NOT_FOUND,
@@ -323,9 +339,14 @@ object ModelRepository {
             }
         }
 
-        val persistentFile = File("/storage/emulated/0/Download", DEFAULT_MODEL_FILENAME)
-        if (persistentFile.exists() && persistentFile.length() >= 500_000_000L) {
-            return persistentFile
+        val persistentCandidateFiles = listOf(
+            File("/storage/emulated/0/Download/AceModels", DEFAULT_MODEL_FILENAME),
+            File("/storage/emulated/0/Download", DEFAULT_MODEL_FILENAME)
+        )
+        for (candidate in persistentCandidateFiles) {
+            if (candidate.exists() && candidate.length() >= 500_000_000L) {
+                return candidate
+            }
         }
 
         return null

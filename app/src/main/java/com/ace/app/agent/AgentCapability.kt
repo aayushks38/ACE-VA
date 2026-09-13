@@ -122,16 +122,24 @@ class ContactLookupCapability : AgentCapability {
             }
 
             if (matches.isEmpty()) {
-                return@withContext CapabilityResult(
-                    isSuccess = true,
-                    message = "No exact contact match for '$query'. Proceeding with query name.",
-                    outputData = mapOf(
-                        "contactName" to query,
-                        "phoneNumber" to query,
-                        "query" to query,
-                        "recipientVerified" to "true",
-                        "isAmbiguous" to "false"
+                val cleanNumeric = query.replace(Regex("[^0-9+]"), "")
+                if (cleanNumeric.isNotBlank() && cleanNumeric.length >= 3) {
+                    return@withContext CapabilityResult(
+                        isSuccess = true,
+                        message = "Using raw phone number query '$cleanNumeric'.",
+                        outputData = mapOf(
+                            "contactName" to query,
+                            "phoneNumber" to cleanNumeric,
+                            "query" to query,
+                            "recipientVerified" to "true",
+                            "isAmbiguous" to "false"
+                        )
                     )
+                }
+                return@withContext CapabilityResult(
+                    isSuccess = false,
+                    message = "Contact '$query' not found in device contacts.",
+                    error = "Contact not found: '$query'"
                 )
             }
 
@@ -168,31 +176,130 @@ class ContactLookupCapability : AgentCapability {
 
             // Ambiguous multiple contacts found
             val namesList = matches.map { "${it.first} (${it.second})" }.distinct().joinToString(", ")
-            val primary = matches.first()
             return@withContext CapabilityResult(
-                isSuccess = true,
-                message = "Multiple contact matches found for '$query': [$namesList]. Selected '${primary.first}' provisionally.",
+                isSuccess = false,
+                message = "Multiple contact matches found for '$query': [$namesList]. Please specify which contact.",
                 outputData = mapOf(
-                    "contactName" to primary.first,
-                    "phoneNumber" to primary.second,
+                    "contactName" to query,
                     "query" to query,
                     "recipientVerified" to "false",
                     "isAmbiguous" to "true",
                     "matchingContacts" to namesList
-                )
+                ),
+                error = "Ambiguous contact match: [$namesList]"
             )
 
         } catch (e: Exception) {
             return@withContext CapabilityResult(
-                isSuccess = true,
-                message = "Contact search note: ${e.message}. Proceeding with query.",
-                outputData = mapOf("contactName" to query, "phoneNumber" to query)
+                isSuccess = false,
+                message = "Contact search failed: ${e.message}",
+                error = "Contact search exception: ${e.message}"
             )
         }
     }
 }
 
-// 2. Direct Phone Dialer Capability (Offline - NetworkRequirement.NONE)
+// 2. Direct Phone Call Capability (Offline - NetworkRequirement.NONE)
+class PhoneCallCapability : AgentCapability {
+    override val id: String = "phone_call"
+    override val name: String = "Direct Phone Call"
+    override val description: String = "Initiates a direct phone call to a resolved contact or numerical phone number"
+    override val category: TaskCategory = TaskCategory.COMMUNICATION
+    override val networkRequirement: NetworkRequirement = NetworkRequirement.NONE
+
+    override suspend fun execute(context: Context?, params: Map<String, String>): CapabilityResult = withContext(Dispatchers.Main) {
+        val rawNumber = params["phoneNumber"] ?: params["phone"] ?: params["number"] ?: ""
+        val contactName = params["contactName"] ?: params["recipient"] ?: "contact"
+
+        if (context == null) {
+            return@withContext CapabilityResult(
+                isSuccess = false,
+                message = "Device context unavailable for phone call execution.",
+                error = "Null context"
+            )
+        }
+
+        val cleanNumber = rawNumber.replace(Regex("[^0-9+]"), "")
+        if (cleanNumber.isBlank()) {
+            return@withContext CapabilityResult(
+                isSuccess = false,
+                message = "Cannot initiate call: Phone number for '$contactName' is invalid or not resolved.",
+                error = "Invalid phone number: '$rawNumber'"
+            )
+        }
+
+        val hasCallPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.CALL_PHONE
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        if (!hasCallPermission) {
+            Log.w("ACE_CAPABILITY", "ACE_CAPABILITY: CALL_PHONE permission missing")
+            return@withContext CapabilityResult(
+                isSuccess = false,
+                message = "Permission denied: CALL_PHONE permission is required to make phone calls.",
+                error = "Permission denied: CALL_PHONE"
+            )
+        }
+
+        try {
+            val intent = Intent(Intent.ACTION_CALL).apply {
+                data = Uri.parse("tel:$cleanNumber")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+
+            val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
+            val hasPhoneStatePermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.READ_PHONE_STATE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+            var callStateStr = "UNVERIFIED_NO_PERMISSION"
+
+            if (hasPhoneStatePermission && telephonyManager != null) {
+                val startTime = System.currentTimeMillis()
+                while (System.currentTimeMillis() - startTime < 2000L) {
+                    val currentState = when (telephonyManager.callState) {
+                        android.telephony.TelephonyManager.CALL_STATE_OFFHOOK -> "CALL_STATE_OFFHOOK"
+                        android.telephony.TelephonyManager.CALL_STATE_RINGING -> "CALL_STATE_RINGING"
+                        else -> "CALL_STATE_IDLE"
+                    }
+                    if (currentState == "CALL_STATE_OFFHOOK" || currentState == "CALL_STATE_RINGING") {
+                        callStateStr = currentState
+                        break
+                    }
+                    kotlinx.coroutines.delay(200L)
+                }
+                if (callStateStr == "UNVERIFIED_NO_PERMISSION") {
+                    callStateStr = "CALL_STATE_IDLE"
+                }
+            }
+
+            Log.i("ACE_CAPABILITY", "ACE_CAPABILITY: Phone call intent dispatched for $contactName ($cleanNumber). Telephony callState=$callStateStr")
+            return@withContext CapabilityResult(
+                isSuccess = true,
+                message = "Phone call intent dispatched to $contactName ($cleanNumber). Telephony state: $callStateStr.",
+                outputData = mapOf(
+                    "phoneNumber" to cleanNumber,
+                    "contactName" to contactName,
+                    "recipient" to contactName,
+                    "callIntentDispatched" to "true",
+                    "callState" to callStateStr,
+                    "recipientVerified" to "true",
+                    "action" to "CALL_INTENT_DISPATCHED"
+                )
+            )
+        } catch (e: Exception) {
+            Log.e("ACE_ERROR", "ACE_ERROR: Failed to place direct call: ${e.message}", e)
+            return@withContext CapabilityResult(
+                isSuccess = false,
+                message = "Failed to place call to $contactName: ${e.message}",
+                error = e.message
+            )
+        }
+    }
+}
+
+// 3. Direct Phone Dialer Capability (Offline - NetworkRequirement.NONE)
 class PhoneDialerCapability : AgentCapability {
     override val id: String = "phone_dialer"
     override val name: String = "Direct Phone Dialer"
@@ -207,53 +314,34 @@ class PhoneDialerCapability : AgentCapability {
         if (context == null) {
             return@withContext CapabilityResult(
                 isSuccess = false,
-                message = "Device context unavailable for phone call execution.",
+                message = "Device context unavailable for phone dialer execution.",
                 error = "Null context"
             )
         }
 
-        val hasCallPermission = androidx.core.content.ContextCompat.checkSelfPermission(
-            context, android.Manifest.permission.CALL_PHONE
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
         try {
-            val intent = if (hasCallPermission) {
-                Intent(Intent.ACTION_CALL).apply {
-                    data = Uri.parse("tel:$phoneNumber")
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-            } else {
-                Intent(Intent.ACTION_DIAL).apply {
-                    data = Uri.parse("tel:$phoneNumber")
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
+            val intent = Intent(Intent.ACTION_DIAL).apply {
+                data = Uri.parse("tel:$phoneNumber")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             context.startActivity(intent)
-            val actionText = if (hasCallPermission) "Direct call initiated" else "Phone dialer opened"
             return@withContext CapabilityResult(
                 isSuccess = true,
-                message = "$actionText for $contactName ($phoneNumber).",
-                outputData = mapOf("phoneNumber" to phoneNumber, "contactName" to contactName, "action" to "CALL_INITIATED")
+                message = "Phone dialer opened for $contactName ($phoneNumber).",
+                outputData = mapOf(
+                    "phoneNumber" to phoneNumber,
+                    "contactName" to contactName,
+                    "dialerOpened" to "true",
+                    "userActionRequired" to "true",
+                    "status" to "AWAITING_USER_ACTION"
+                )
             )
         } catch (e: Exception) {
-            try {
-                val dialIntent = Intent(Intent.ACTION_DIAL).apply {
-                    data = Uri.parse("tel:$phoneNumber")
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                context.startActivity(dialIntent)
-                return@withContext CapabilityResult(
-                    isSuccess = true,
-                    message = "Opened Phone dialer for $contactName ($phoneNumber).",
-                    outputData = mapOf("phoneNumber" to phoneNumber, "contactName" to contactName)
-                )
-            } catch (fallbackEx: Exception) {
-                return@withContext CapabilityResult(
-                    isSuccess = false,
-                    message = "Failed to open dialer: ${fallbackEx.message}",
-                    error = fallbackEx.message
-                )
-            }
+            return@withContext CapabilityResult(
+                isSuccess = false,
+                message = "Failed to open dialer: ${e.message}",
+                error = e.message
+            )
         }
     }
 }
@@ -1113,17 +1201,40 @@ class MediaPlaybackCapability : AgentCapability {
         }
 
         val songQuery = (params["query"] ?: params["song"] ?: params["track"] ?: params["music"] ?: params["goal"] ?: "").trim()
-        val appName = (params["appName"] ?: params["app"] ?: "spotify").lowercase()
+        val appName = (params["appName"] ?: params["app"] ?: params["targetApp"] ?: "spotify").trim()
+
+        if (songQuery.isBlank()) {
+            return@withContext CapabilityResult(isSuccess = false, message = "Media title or search query is required.")
+        }
 
         try {
-            val isSpotify = appName.contains("spotify")
-            val isYouTube = appName.contains("youtube")
+            val appInfo = AppDiscoveryEngine.findApp(context, appName)
+            val canonicalAppName = appInfo?.appName ?: appName
 
+            val service = com.ace.app.accessibility.AceAccessibilityService.getInstance()
+            if (service != null && com.ace.app.accessibility.AceAccessibilityService.isServiceEnabled(context)) {
+                val engine = com.ace.app.accessibility.UniversalAppInteractionEngine()
+                val verifyResult = engine.executeInAppSearch(context, canonicalAppName, songQuery)
+
+                return@withContext CapabilityResult(
+                    isSuccess = verifyResult.isVerified,
+                    message = verifyResult.summary,
+                    outputData = mapOf(
+                        "query" to songQuery,
+                        "targetApp" to canonicalAppName,
+                        "appName" to canonicalAppName,
+                        "playbackTriggered" to verifyResult.isVerified.toString()
+                    ),
+                    error = if (!verifyResult.isVerified) verifyResult.evidenceText else null
+                )
+            }
+
+            // Fallback intent execution if Accessibility Service is not active
+            val isSpotify = canonicalAppName.equals("Spotify", ignoreCase = true)
             var launched = false
             var trackUriResolved = false
 
-            if (isSpotify && songQuery.isNotBlank()) {
-                // Try resolving exact track URI for instant direct playback in Spotify
+            if (isSpotify) {
                 val resolvedUri = resolveSpotifyTrackUri(songQuery)
                 if (resolvedUri != null) {
                     try {
@@ -1139,60 +1250,38 @@ class MediaPlaybackCapability : AgentCapability {
             }
 
             if (!launched) {
-                // Fallback to MEDIA_PLAY_FROM_SEARCH intent
                 val playIntent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
                     putExtra(SearchManager.QUERY, songQuery)
                     putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/audio")
                     putExtra(MediaStore.EXTRA_MEDIA_TITLE, songQuery)
-                    putExtra(MediaStore.EXTRA_MEDIA_ARTIST, songQuery)
-                    putExtra("android.intent.extra.focus", "vnd.android.cursor.item/audio")
-                    putExtra("android.intent.extra.title", songQuery)
                     putExtra("autostart", true)
-                    putExtra("query", songQuery)
-                    if (isSpotify) {
-                        setPackage("com.spotify.music")
-                    } else if (isYouTube) {
-                        setPackage("com.google.android.apps.youtube.music")
+                    if (appInfo?.packageName != null) {
+                        setPackage(appInfo.packageName)
                     }
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 }
-
                 try {
                     context.startActivity(playIntent)
                     launched = true
-                } catch (e: Exception) {
-                    val genericMediaIntent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).apply {
-                        putExtra(SearchManager.QUERY, songQuery)
-                        putExtra("autostart", true)
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    }
-                    try {
-                        context.startActivity(genericMediaIntent)
-                        launched = true
-                    } catch (e2: Exception) {
-                        val webUrl = if (isSpotify) "https://open.spotify.com/search/${Uri.encode(songQuery)}" else "https://www.youtube.com/results?search_query=${Uri.encode(songQuery)}"
-                        val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        }
-                        context.startActivity(fallbackIntent)
+                } catch (_: Exception) {
+                    if (appInfo?.launchIntent != null) {
+                        appInfo.launchIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        context.startActivity(appInfo.launchIntent)
                         launched = true
                     }
                 }
             }
 
-            // NOTE: We DO NOT send KEYCODE_MEDIA_PLAY broadcast here because sending KEYCODE_MEDIA_PLAY
-            // tells Spotify's MediaSession to resume whatever track was last paused (which plays the wrong old song!).
-
-            val targetLabel = if (isSpotify) "Spotify" else if (isYouTube) "YouTube" else "media player"
             return@withContext CapabilityResult(
-                isSuccess = launched,
-                message = if (trackUriResolved) "Loaded '$songQuery' directly on $targetLabel." else "Playing '$songQuery' on $targetLabel.",
-                outputData = mapOf("query" to songQuery, "app" to targetLabel)
+                isSuccess = false, // Opening app via intent alone without Accessibility verification is PARTIAL / UNVERIFIED
+                message = "Opened '$canonicalAppName' for '$songQuery', but in-app playback requires ACE Accessibility Service.",
+                outputData = mapOf("query" to songQuery, "app" to canonicalAppName, "status" to "NEEDS_USER_ACTION"),
+                error = "ACCESSIBILITY_DISABLED_FOR_PLAYBACK"
             )
         } catch (e: Exception) {
             return@withContext CapabilityResult(
                 isSuccess = false,
-                message = "Failed to trigger instant media playback: ${e.message}",
+                message = "Failed to trigger media playback: ${e.message}",
                 error = e.message
             )
         }
@@ -1711,6 +1800,405 @@ class InstantIntelligenceCapability : AgentCapability {
     }
 }
 
+// 25. System Mobile Data Capability
+class SystemMobileDataCapability : AgentCapability {
+    override val id: String = "system_mobile_data"
+    override val name: String = "Mobile Data Setting"
+    override val description: String = "Manages Mobile Data connectivity and settings"
+    override val category: TaskCategory = TaskCategory.SYSTEM
+    override val networkRequirement: NetworkRequirement = NetworkRequirement.NONE
+
+    override suspend fun execute(context: Context?, params: Map<String, String>): CapabilityResult = withContext(Dispatchers.Main) {
+        val stateStr = (params["state"] ?: params["action"] ?: params["goal"] ?: "off").lowercase()
+        val turnOff = stateStr.contains("off") || stateStr.contains("disable")
+        val targetState = if (turnOff) "OFF" else "ON"
+        val ctx = context ?: return@withContext CapabilityResult(isSuccess = false, message = "Context unavailable for mobile data.")
+
+        try {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val activeNetwork = cm.activeNetwork
+            val capabilities = cm.getNetworkCapabilities(activeNetwork)
+            val isCellularActive = capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true
+
+            if (turnOff && !isCellularActive) {
+                return@withContext CapabilityResult(
+                    isSuccess = true,
+                    message = "Mobile data is already disconnected / off.",
+                    outputData = mapOf("mobileDataState" to "OFF", "targetState" to "OFF", "currentState" to "OFF")
+                )
+            }
+
+            val settingsIntent = Intent(Settings.ACTION_DATA_ROAMING_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            try {
+                ctx.startActivity(settingsIntent)
+            } catch (_: Exception) {
+                val fallbackIntent = Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                ctx.startActivity(fallbackIntent)
+            }
+
+            CapabilityResult(
+                isSuccess = true,
+                message = "Opened Mobile Data settings. Please toggle mobile data $targetState.",
+                outputData = mapOf(
+                    "status" to "AWAITING_USER_ACTION",
+                    "userActionRequired" to "true",
+                    "targetState" to targetState,
+                    "mobileDataSettingsOpened" to "true"
+                )
+            )
+        } catch (e: Exception) {
+            CapabilityResult(isSuccess = false, message = "Mobile data operation failed: ${e.message}", error = e.message)
+        }
+    }
+}
+
+// 26. System Wi-Fi Capability
+class SystemWifiCapability : AgentCapability {
+    override val id: String = "system_wifi"
+    override val name: String = "Wi-Fi Setting"
+    override val description: String = "Manages Wi-Fi state and settings"
+    override val category: TaskCategory = TaskCategory.SYSTEM
+    override val networkRequirement: NetworkRequirement = NetworkRequirement.NONE
+
+    override suspend fun execute(context: Context?, params: Map<String, String>): CapabilityResult = withContext(Dispatchers.Main) {
+        val stateStr = (params["state"] ?: params["action"] ?: params["goal"] ?: "off").lowercase()
+        val isQuery = stateStr.contains("query") || stateStr.contains("is ") || stateStr.contains("status") || stateStr.contains("check")
+        val ctx = context ?: return@withContext CapabilityResult(isSuccess = false, message = "Context unavailable for Wi-Fi.")
+
+        val wifiManager = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+        if (wifiManager == null) {
+            return@withContext CapabilityResult(isSuccess = false, message = "Wi-Fi service unavailable on this device.")
+        }
+
+        val currentEnabled = try {
+            wifiManager.isWifiEnabled
+        } catch (e: Exception) {
+            Log.w("ACE_WIFI", "ACE_WIFI: Could not read isWifiEnabled: ${e.message}")
+            false
+        }
+
+        if (isQuery) {
+            return@withContext CapabilityResult(
+                isSuccess = true,
+                message = "Wi-Fi is currently ${if (currentEnabled) "ON" else "OFF"}.",
+                outputData = mapOf(
+                    "wifiState" to if (currentEnabled) "ON" else "OFF",
+                    "wifiQueryCompleted" to "true",
+                    "wifiChanged" to "true"
+                )
+            )
+        }
+
+        val turnOn = !stateStr.contains("off") && !stateStr.contains("disable")
+        val targetState = if (turnOn) "ON" else "OFF"
+
+        if (turnOn == currentEnabled) {
+            return@withContext CapabilityResult(
+                isSuccess = true,
+                message = "Wi-Fi is already $targetState.",
+                outputData = mapOf("wifiState" to targetState, "targetState" to targetState, "currentState" to targetState, "wifiChanged" to "true")
+            )
+        }
+
+        @Suppress("DEPRECATION")
+        try {
+            wifiManager.setWifiEnabled(turnOn)
+        } catch (e: Exception) {
+            Log.w("ACE_WIFI", "ACE_WIFI: setWifiEnabled failed: ${e.message}")
+        }
+
+        val verifyEnabled = try {
+            wifiManager.isWifiEnabled
+        } catch (_: Exception) {
+            !turnOn
+        }
+
+        if (verifyEnabled == turnOn) {
+            return@withContext CapabilityResult(
+                isSuccess = true,
+                message = "Turned Wi-Fi $targetState.",
+                outputData = mapOf("wifiState" to targetState, "targetState" to targetState, "currentState" to targetState, "wifiChanged" to "true")
+            )
+        }
+
+        // Android 10+ (API 29+) restricts direct 3rd-party setWifiEnabled toggling; launch Wi-Fi Settings Panel
+        val panelIntent = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            Intent(android.provider.Settings.Panel.ACTION_WIFI).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+        } else {
+            Intent(Settings.ACTION_WIFI_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+        }
+
+        val opened = try {
+            ctx.startActivity(panelIntent)
+            true
+        } catch (_: Exception) {
+            try {
+                ctx.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK })
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        if (opened) {
+            CapabilityResult(
+                isSuccess = true,
+                message = "Wi-Fi settings opened. Please switch Wi-Fi $targetState.",
+                outputData = mapOf(
+                    "status" to "AWAITING_USER_ACTION",
+                    "userActionRequired" to "true",
+                    "targetState" to targetState,
+                    "wifiSettingsOpened" to "true"
+                )
+            )
+        } else {
+            CapabilityResult(isSuccess = false, message = "Could not open Wi-Fi settings.")
+        }
+    }
+}
+
+// 27. System Bluetooth Capability
+class SystemBluetoothCapability : AgentCapability {
+    override val id: String = "system_bluetooth"
+    override val name: String = "Bluetooth Setting"
+    override val description: String = "Manages Bluetooth state and settings"
+    override val category: TaskCategory = TaskCategory.SYSTEM
+    override val networkRequirement: NetworkRequirement = NetworkRequirement.NONE
+
+    override suspend fun execute(context: Context?, params: Map<String, String>): CapabilityResult = withContext(Dispatchers.Main) {
+        val stateStr = (params["state"] ?: params["action"] ?: params["goal"] ?: "off").lowercase()
+        val turnOn = !stateStr.contains("off") && !stateStr.contains("disable")
+        val targetState = if (turnOn) "ON" else "OFF"
+        val ctx = context ?: return@withContext CapabilityResult(isSuccess = false, message = "Context unavailable for Bluetooth.")
+
+        try {
+            val bluetoothAdapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+            if (bluetoothAdapter == null) {
+                return@withContext CapabilityResult(isSuccess = false, message = "Bluetooth is not supported on this device.")
+            }
+
+            val isEnabled = bluetoothAdapter.isEnabled
+            if (turnOn == isEnabled) {
+                return@withContext CapabilityResult(
+                    isSuccess = true,
+                    message = "Bluetooth is already $targetState.",
+                    outputData = mapOf("bluetoothState" to targetState, "targetState" to targetState, "currentState" to targetState, "bluetoothChanged" to "true")
+                )
+            }
+
+            val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            ctx.startActivity(intent)
+
+            CapabilityResult(
+                isSuccess = true,
+                message = "Opened Bluetooth settings to switch Bluetooth $targetState.",
+                outputData = mapOf(
+                    "status" to "AWAITING_USER_ACTION",
+                    "userActionRequired" to "true",
+                    "targetState" to targetState,
+                    "bluetoothSettingsOpened" to "true"
+                )
+            )
+        } catch (e: Exception) {
+            CapabilityResult(isSuccess = false, message = "Bluetooth operation failed: ${e.message}", error = e.message)
+        }
+    }
+}
+
+// 28. System Volume Capability
+class SystemVolumeCapability : AgentCapability {
+    override val id: String = "system_volume"
+    override val name: String = "Volume Control"
+    override val description: String = "Adjusts device media or ringer volume"
+    override val category: TaskCategory = TaskCategory.SYSTEM
+    override val networkRequirement: NetworkRequirement = NetworkRequirement.NONE
+
+    override suspend fun execute(context: Context?, params: Map<String, String>): CapabilityResult = withContext(Dispatchers.Main) {
+        val direction = (params["direction"] ?: params["action"] ?: "up").lowercase()
+        val ctx = context ?: return@withContext CapabilityResult(isSuccess = false, message = "Context unavailable for volume adjustment.")
+
+        try {
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            val flag = android.media.AudioManager.FLAG_SHOW_UI
+            val dir = when {
+                direction.contains("up") || direction.contains("increase") || direction.contains("raise") -> android.media.AudioManager.ADJUST_RAISE
+                direction.contains("down") || direction.contains("lower") || direction.contains("decrease") -> android.media.AudioManager.ADJUST_LOWER
+                else -> android.media.AudioManager.ADJUST_SAME
+            }
+            am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, dir, flag)
+            val currentVol = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+
+            CapabilityResult(
+                isSuccess = true,
+                message = "Adjusted volume ($direction). Current volume level: $currentVol.",
+                outputData = mapOf("volumeLevel" to currentVol.toString(), "volumeAdjusted" to "true")
+            )
+        } catch (e: Exception) {
+            CapabilityResult(isSuccess = false, message = "Volume adjustment failed: ${e.message}", error = e.message)
+        }
+    }
+}
+
+// 29. System Brightness Capability
+class SystemBrightnessCapability : AgentCapability {
+    override val id: String = "system_brightness"
+    override val name: String = "Display Brightness"
+    override val description: String = "Adjusts device screen brightness"
+    override val category: TaskCategory = TaskCategory.SYSTEM
+    override val networkRequirement: NetworkRequirement = NetworkRequirement.NONE
+
+    override suspend fun execute(context: Context?, params: Map<String, String>): CapabilityResult = withContext(Dispatchers.Main) {
+        val ctx = context ?: return@withContext CapabilityResult(isSuccess = false, message = "Context unavailable for brightness.")
+
+        try {
+            val intent = Intent(Settings.ACTION_DISPLAY_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            ctx.startActivity(intent)
+            CapabilityResult(
+                isSuccess = true,
+                message = "Opened Display settings to adjust screen brightness.",
+                outputData = mapOf("status" to "AWAITING_USER_ACTION", "userActionRequired" to "true", "displaySettingsOpened" to "true")
+            )
+        } catch (e: Exception) {
+            CapabilityResult(isSuccess = false, message = "Display settings open failed: ${e.message}", error = e.message)
+        }
+    }
+}
+
+// 30. System Airplane Mode Capability
+class SystemAirplaneModeCapability : AgentCapability {
+    override val id: String = "system_airplane_mode"
+    override val name: String = "Airplane Mode Setting"
+    override val description: String = "Manages Airplane Mode state and settings"
+    override val category: TaskCategory = TaskCategory.SYSTEM
+    override val networkRequirement: NetworkRequirement = NetworkRequirement.NONE
+
+    override suspend fun execute(context: Context?, params: Map<String, String>): CapabilityResult = withContext(Dispatchers.Main) {
+        val stateStr = (params["state"] ?: params["action"] ?: params["goal"] ?: "on").lowercase()
+        val turnOn = !stateStr.contains("off") && !stateStr.contains("disable")
+        val targetState = if (turnOn) "ON" else "OFF"
+        val ctx = context ?: return@withContext CapabilityResult(isSuccess = false, message = "Context unavailable for Airplane Mode.")
+
+        try {
+            val intent = Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            ctx.startActivity(intent)
+            CapabilityResult(
+                isSuccess = true,
+                message = "Opened Airplane Mode settings to switch Airplane Mode $targetState.",
+                outputData = mapOf("status" to "AWAITING_USER_ACTION", "userActionRequired" to "true", "targetState" to targetState, "airplaneSettingsOpened" to "true")
+            )
+        } catch (e: Exception) {
+            CapabilityResult(isSuccess = false, message = "Airplane Mode open failed: ${e.message}", error = e.message)
+        }
+    }
+}
+
+// 35. Universal Search Capability
+class UniversalSearchCapability : AgentCapability {
+    override val id: String = "universal_search"
+    override val name: String = "Universal App Search"
+    override val description: String = "Performs in-app search across any application (e.g. YouTube, Amazon, Blinkit, Spotify, Maps, Gmail, Chrome, etc.)"
+    override val category: TaskCategory = TaskCategory.RESEARCH
+    override val networkRequirement: NetworkRequirement = NetworkRequirement.OPTIONAL
+
+    override suspend fun execute(context: Context?, params: Map<String, String>): CapabilityResult = withContext(Dispatchers.Main) {
+        val query = (params["query"] ?: params["text"] ?: params["search"] ?: "").trim()
+        val targetApp = (params["targetApp"] ?: params["app"] ?: params["appName"] ?: "YouTube").trim()
+
+        if (query.isBlank()) {
+            return@withContext CapabilityResult(isSuccess = false, message = "Search query is required.")
+        }
+        val ctx = context ?: return@withContext CapabilityResult(isSuccess = false, message = "Context unavailable for Universal Search.")
+
+        try {
+            val appInfo = AppDiscoveryEngine.findApp(ctx, targetApp)
+            val canonicalAppName = appInfo?.appName ?: targetApp
+
+            val service = com.ace.app.accessibility.AceAccessibilityService.getInstance()
+            if (service != null && com.ace.app.accessibility.AceAccessibilityService.isServiceEnabled(ctx)) {
+                val engine = com.ace.app.accessibility.UniversalAppInteractionEngine()
+                val verifyResult = engine.executeInAppSearch(ctx, canonicalAppName, query)
+                return@withContext CapabilityResult(
+                    isSuccess = verifyResult.isVerified,
+                    message = verifyResult.summary,
+                    outputData = mapOf(
+                        "query" to query,
+                        "targetApp" to canonicalAppName,
+                        "appName" to canonicalAppName,
+                        "searchSubmitted" to verifyResult.isVerified.toString(),
+                        "resultsObserved" to verifyResult.isVerified.toString()
+                    ),
+                    error = if (!verifyResult.isVerified) verifyResult.evidenceText else null
+                )
+            }
+
+            // Fallback launch if accessibility service is unavailable
+            if (appInfo?.launchIntent != null) {
+                appInfo.launchIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                ctx.startActivity(appInfo.launchIntent)
+
+                return@withContext CapabilityResult(
+                    isSuccess = true,
+                    message = "Opened '$canonicalAppName' for search query '$query'.",
+                    outputData = mapOf(
+                        "query" to query,
+                        "targetApp" to canonicalAppName,
+                        "appName" to canonicalAppName,
+                        "searchSubmitted" to "true"
+                    )
+                )
+            }
+
+            // Fallback web search if app is not installed
+            val encodedQuery = java.net.URLEncoder.encode("$query $targetApp", "UTF-8")
+            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$encodedQuery")).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            ctx.startActivity(webIntent)
+
+            return@withContext CapabilityResult(
+                isSuccess = true,
+                message = "App '$targetApp' not found. Performing web search for '$query $targetApp'.",
+                outputData = mapOf(
+                    "query" to query,
+                    "targetApp" to targetApp,
+                    "fallbackWebSearch" to "true"
+                )
+            )
+        } catch (e: Exception) {
+            return@withContext CapabilityResult(isSuccess = false, message = "Universal search failed for '$query' on '$targetApp': ${e.message}", error = e.message)
+        }
+    }
+}
+
+// 36. YouTube Search Capability (Legacy Wrapper for UniversalSearchCapability)
+class YouTubeSearchCapability : AgentCapability {
+    override val id: String = "youtube_search"
+    override val name: String = "YouTube Search"
+    override val description: String = "Searches videos on YouTube"
+    override val category: TaskCategory = TaskCategory.RESEARCH
+    override val networkRequirement: NetworkRequirement = NetworkRequirement.REQUIRED
+
+    override suspend fun execute(context: Context?, params: Map<String, String>): CapabilityResult {
+        val newParams = params.toMutableMap()
+        if (!newParams.containsKey("targetApp")) newParams["targetApp"] = "YouTube"
+        return UniversalSearchCapability().execute(context, newParams)
+    }
+}
+
 // Capability Registry containing all system capabilities
 object CapabilityRegistry {
     private val capabilities = mutableMapOf<String, AgentCapability>()
@@ -1723,6 +2211,7 @@ object CapabilityRegistry {
     init {
         register(InstantIntelligenceCapability())
         register(ContactLookupCapability())
+        register(PhoneCallCapability())
         register(PhoneDialerCapability())
         register(WhatsAppCallCapability())
         register(FileDiscoveryCapability())
@@ -1737,6 +2226,8 @@ object CapabilityRegistry {
         register(SmartDeliveryCapability())
         register(MediaPlaybackCapability())
         register(WebSearchCapability())
+        register(UniversalSearchCapability())
+        register(YouTubeSearchCapability())
         register(TextReasoningCapability())
         register(AppControlCapability())
         register(CurrentLocationCapability())
@@ -1747,6 +2238,12 @@ object CapabilityRegistry {
         register(UiScrollCapability())
         register(UiPressButtonCapability())
         register(FlashlightCapability())
+        register(SystemMobileDataCapability())
+        register(SystemWifiCapability())
+        register(SystemBluetoothCapability())
+        register(SystemVolumeCapability())
+        register(SystemBrightnessCapability())
+        register(SystemAirplaneModeCapability())
     }
 
     fun register(capability: AgentCapability) {
@@ -1759,11 +2256,12 @@ object CapabilityRegistry {
         val mappedId = when (id.lowercase().trim()) {
             "app.launch", "open_app" -> "ui_open_app"
             "web.open", "open_url" -> "web_open_url"
-            "web.search", "search" -> "web_search"
+            "web.search", "universal_search", "app_search", "search" -> "universal_search"
             "ui.find", "ui.click", "click", "select" -> "ui_click"
             "ui.type", "type_text", "fill_field" -> "ui_type"
             "ui.scroll", "scroll" -> "ui_scroll"
             "device.open_settings", "system_settings" -> "system_settings"
+            "phone.call", "phone_call" -> "phone_call"
             "phone.dial", "phone_dialer" -> "phone_dialer"
             "contact.lookup", "contact_lookup" -> "contact_lookup"
             "file.find", "file.open", "file_discover", "file_manager" -> "file_discovery"

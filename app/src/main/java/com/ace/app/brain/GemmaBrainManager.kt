@@ -152,7 +152,16 @@ object GemmaBrainManager {
             // Check persistent model on disk
             if (!isModelInstalled(context)) {
                 Log.w(TAG_BRAIN, "ACE_BRAIN: cannot load runtime - model file not installed on disk.")
+                Log.e("ACE_MODEL_ERROR", "ACE_MODEL_ERROR: FAILED - model file not found or unreadable on disk")
                 _runtimeState.value = BrainRuntimeState.NOT_LOADED
+                return@withContext false
+            }
+
+            // RAM Pre-check: Ensure device has sufficient memory to host ~4 GB Gemma runtime safely
+            if (!hasSufficientMemory(context)) {
+                Log.w(TAG_BRAIN, "ACE_BRAIN: Memory pre-check failed. Insufficient device RAM for 4.46B parameter Gemma model.")
+                Log.e("ACE_MODEL_ERROR", "ACE_MODEL_ERROR: FAILED - Insufficient device RAM for local Gemma model")
+                _runtimeState.value = BrainRuntimeState.ERROR
                 return@withContext false
             }
 
@@ -170,6 +179,8 @@ object GemmaBrainManager {
                 sizeBytes = discovery.sizeBytes
             )
 
+            Log.i("ACE_MODEL_INIT", "ACE_MODEL_INIT: INITIALIZING path=${handle.path} size=${handle.sizeBytes}")
+
             val loadStart = System.currentTimeMillis()
             val initResult = brain.initialize(context, handle)
             val readyTimeMs = System.currentTimeMillis()
@@ -181,6 +192,7 @@ object GemmaBrainManager {
                 val discMs = if (modelFoundTimeMs > 0) modelFoundTimeMs - processStartTimeMs else 0L
                 val rtLoadMs = readyTimeMs - runtimeInitStartTimeMs
 
+                Log.i("ACE_MODEL_READY", "ACE_MODEL_READY: READY load_time_ms=$rtLoadMs total_time_ms=$lastBrainReadyTimeMs")
                 Log.i(TAG_BRAIN, "ACE_BRAIN: runtime_ready=true")
                 Log.i(TAG_BRAIN, "ACE_BRAIN: instance_id=$instanceId")
                 Log.i(TAG_BRAIN, "ACE_BRAIN: model_discovery_ms=$discMs")
@@ -189,6 +201,7 @@ object GemmaBrainManager {
                 true
             } else {
                 _runtimeState.value = BrainRuntimeState.ERROR
+                Log.e("ACE_MODEL_ERROR", "ACE_MODEL_ERROR: FAILED reason=$initResult")
                 Log.e(TAG_BRAIN, "ACE_BRAIN: runtime_state=ERROR (Initialization failed: $initResult)")
                 false
             }
@@ -248,6 +261,26 @@ object GemmaBrainManager {
     fun onDownloadFailed(reason: String) {
         _installationState.value = ModelInstallationState.FAILED
         Log.e(TAG_BRAIN, "ACE_BRAIN: model_download_failed reason=$reason")
+    }
+
+    /**
+     * Memory pre-check helper.
+     */
+    fun hasSufficientMemory(context: Context): Boolean {
+        try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager ?: return true
+            val memInfo = android.app.ActivityManager.MemoryInfo()
+            am.getMemoryInfo(memInfo)
+            val totalRamMb = memInfo.totalMem / (1024 * 1024)
+            val availRamMb = memInfo.availMem / (1024 * 1024)
+            Log.i(TAG_BRAIN, "ACE_BRAIN: device_total_ram_mb=$totalRamMb avail_ram_mb=$availRamMb low_memory=${memInfo.lowMemory}")
+            if (totalRamMb < 3500 || availRamMb < 1000 || memInfo.lowMemory) {
+                return false
+            }
+        } catch (e: Exception) {
+            Log.w(TAG_BRAIN, "ACE_BRAIN: Could not query memory info: ${e.message}")
+        }
+        return true
     }
 
     /**

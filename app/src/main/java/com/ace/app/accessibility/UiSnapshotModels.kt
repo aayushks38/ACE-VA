@@ -29,8 +29,29 @@ data class CandidateMatch(
     val node: UiNode,
     val candidateText: String,
     val confidence: Float,
-    val strategyUsed: String = "Semantic Match"
+    val strategyUsed: String = "Semantic Match",
+    val centerX: Float? = null,
+    val centerY: Float? = null
 )
+
+fun UiNode.getRect(): android.graphics.Rect? {
+    if (boundsInScreen.isBlank()) return null
+    return try {
+        val clean = boundsInScreen.replace("[", "").replace("]", ",")
+        val parts = clean.split(",").mapNotNull { it.trim().toIntOrNull() }
+        if (parts.size == 4) {
+            android.graphics.Rect(parts[0], parts[1], parts[2], parts[3])
+        } else null
+    } catch (_: Exception) {
+        null
+    }
+}
+
+fun UiNode.getCenterCoordinates(): Pair<Float, Float>? {
+    val rect = getRect() ?: return null
+    if (rect.isEmpty || rect.width() <= 0 || rect.height() <= 0) return null
+    return Pair(rect.left + (rect.width() / 2.0f), rect.top + (rect.height() / 2.0f))
+}
 
 enum class InterruptionType {
     NONE,

@@ -35,11 +35,10 @@ sealed class BrainResult {
     object Cancelled : BrainResult()
 }
 
-interface LocalBrain {
+interface LocalBrain : ReasoningBrain {
     suspend fun initialize(context: Context, handle: ModelHandle): BrainResult
     suspend fun generate(goal: String, contextInput: String = "", generationId: Long = 0): BrainResult
     suspend fun cancel()
-    fun isReady(): Boolean
     fun getBrainState(): BrainState
     fun close()
 }

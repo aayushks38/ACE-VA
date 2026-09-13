@@ -38,7 +38,7 @@ class ModelDownloadViewModel(application: Application) : AndroidViewModel(applic
     private var downloadJob: Job? = null
 
     init {
-        checkRegisteredModel(application.applicationContext)
+        android.util.Log.i("ACE_ONBOARDING", "ACE_ONBOARDING: entered model selection")
     }
 
     fun checkRegisteredModel(context: Context) {
@@ -46,9 +46,17 @@ class ModelDownloadViewModel(application: Application) : AndroidViewModel(applic
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
 
             val isInstalled = com.ace.app.brain.GemmaBrainManager.isModelInstalled(context)
-            if (isInstalled) {
-                val loaded = com.ace.app.brain.GemmaBrainManager.ensureRuntimeLoaded(context)
-                if (loaded) {
+            val isSetupComplete = com.ace.app.brain.model.OnboardingManager.isModelSetupComplete(context)
+            
+            if (isInstalled && isSetupComplete) {
+                val loaded = try {
+                    com.ace.app.brain.GemmaBrainManager.ensureRuntimeLoaded(context)
+                } catch (t: Throwable) {
+                    android.util.Log.e("ACE_ONBOARDING", "ACE_ONBOARDING: Exception during checkRegisteredModel: ${t.message}", t)
+                    false
+                }
+
+                if (loaded && com.ace.app.brain.GemmaBrainManager.getBrain(context).isReady()) {
                     _uiState.value = _uiState.value.copy(isLoading = false, isReady = true)
                     return@launch
                 }
@@ -58,22 +66,83 @@ class ModelDownloadViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
+    fun initializeDiscoveredModel(context: Context) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+            android.util.Log.i("ACE_ONBOARDING", "ACE_ONBOARDING: auto-detected model selected")
+            android.util.Log.i("ACE_ONBOARDING", "ACE_ONBOARDING: initialization started")
+
+            val discovery = ModelRepository.discoverModel(context)
+            if (discovery.state == com.ace.app.brain.model.ModelDiscoveryState.MODEL_FOUND) {
+                ModelRepository.registerModel(context, discovery.uri, discovery.path, "Gemma 3N E2B Q4_0")
+                
+                val loaded = try {
+                    com.ace.app.brain.GemmaBrainManager.ensureRuntimeLoaded(context)
+                } catch (t: Throwable) {
+                    android.util.Log.e("ACE_ONBOARDING", "ACE_ONBOARDING: initialization failed with exception: ${t.message}", t)
+                    false
+                }
+
+                if (loaded && com.ace.app.brain.GemmaBrainManager.getBrain(context).isReady()) {
+                    android.util.Log.i("ACE_ONBOARDING", "ACE_ONBOARDING: initialization succeeded")
+                    com.ace.app.brain.model.OnboardingManager.setModelSetupComplete(context, true)
+                    _uiState.value = _uiState.value.copy(isLoading = false, isReady = true)
+                } else {
+                    android.util.Log.e("ACE_ONBOARDING", "ACE_ONBOARDING: initialization failed")
+                    com.ace.app.brain.model.OnboardingManager.setModelSetupComplete(context, false)
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        isReady = false,
+                        errorMessage = "Model initialization failed. Please verify memory availability or select another file."
+                    )
+                }
+            } else {
+                android.util.Log.e("ACE_ONBOARDING", "ACE_ONBOARDING: initialization failed - no model found")
+                com.ace.app.brain.model.OnboardingManager.setModelSetupComplete(context, false)
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    isReady = false,
+                    errorMessage = "No valid model file discovered on device."
+                )
+            }
+        }
+    }
+
     fun onFileSelected(context: Context, uri: Uri) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+            android.util.Log.i("ACE_ONBOARDING", "ACE_ONBOARDING: model selected via SAF URI")
+            android.util.Log.i("ACE_ONBOARDING", "ACE_ONBOARDING: initialization started")
 
             val validation = ModelRepository.validateModel(context, uri, null)
             when (validation) {
                 is ModelValidationResult.Success -> {
                     ModelRepository.registerModel(context, uri, "/storage/emulated/0/Download/AceModels/gemma-3n-E2B-it-Q4_0.gguf", validation.spec.name)
-                    val loaded = com.ace.app.brain.GemmaBrainManager.ensureRuntimeLoaded(context)
-                    if (loaded) {
+                    
+                    val loaded = try {
+                        com.ace.app.brain.GemmaBrainManager.ensureRuntimeLoaded(context)
+                    } catch (t: Throwable) {
+                        android.util.Log.e("ACE_ONBOARDING", "ACE_ONBOARDING: initialization failed with exception: ${t.message}", t)
+                        false
+                    }
+
+                    if (loaded && com.ace.app.brain.GemmaBrainManager.getBrain(context).isReady()) {
+                        android.util.Log.i("ACE_ONBOARDING", "ACE_ONBOARDING: initialization succeeded")
+                        com.ace.app.brain.model.OnboardingManager.setModelSetupComplete(context, true)
                         _uiState.value = _uiState.value.copy(isLoading = false, isReady = true)
                     } else {
-                        _uiState.value = _uiState.value.copy(isLoading = false, isReady = false, errorMessage = "Model load failed")
+                        android.util.Log.e("ACE_ONBOARDING", "ACE_ONBOARDING: initialization failed")
+                        com.ace.app.brain.model.OnboardingManager.setModelSetupComplete(context, false)
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false,
+                            isReady = false,
+                            errorMessage = "Model initialization failed. Please retry or choose another file."
+                        )
                     }
                 }
                 is ModelValidationResult.Error -> {
+                    android.util.Log.e("ACE_ONBOARDING", "ACE_ONBOARDING: initialization failed - invalid model file")
+                    com.ace.app.brain.model.OnboardingManager.setModelSetupComplete(context, false)
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         isReady = false,

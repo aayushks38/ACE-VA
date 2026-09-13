@@ -45,9 +45,8 @@ fun EmailLoginScreen(
     }*/
 
     LaunchedEffect(uiState.isAuthenticated) {
-        println("ACE DEBUG: isAuthenticated = ${uiState.isAuthenticated}")
         if (uiState.isAuthenticated) {
-            println("ACE DEBUG: Navigating to home")
+            android.util.Log.i("ACE_ONBOARDING", "ACE_ONBOARDING: login completed via Email")
             onAuthSuccess()
         }
     }

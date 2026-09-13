@@ -70,7 +70,8 @@ data class TaskStep(
     val isVerified: Boolean = false,
     val requiresApproval: Boolean = false,
     val output: String? = null,
-    val outputData: Map<String, String> = emptyMap()
+    val outputData: Map<String, String> = emptyMap(),
+    val taskGenerationId: Long = 0L
 )
 
 data class ToolExecutionResult(
@@ -101,5 +102,6 @@ data class AgentTask(
     val attachmentUri: String? = null,
     val verificationResult: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val completedAt: Long? = null
+    val completedAt: Long? = null,
+    val taskGenerationId: Long = 0L
 )

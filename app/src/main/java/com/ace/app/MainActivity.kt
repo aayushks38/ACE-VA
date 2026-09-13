@@ -70,8 +70,24 @@ fun AceApp() {
     val context = LocalContext.current
 
     val startDestination = remember {
+        val isOnboarded = com.ace.app.brain.model.OnboardingManager.isOnboardingComplete(context)
+        val isModelSetup = com.ace.app.brain.model.OnboardingManager.isModelSetupComplete(context)
         val isInstalled = com.ace.app.brain.GemmaBrainManager.isModelInstalled(context)
-        if (isInstalled) "home" else "model_setup"
+        val brainReady = com.ace.app.brain.GemmaBrainManager.getBrain(context).isReady()
+
+        val dest = when {
+            !isOnboarded -> "welcome"
+            !isModelSetup -> "model_setup"
+            else -> "home"
+        }
+
+        android.util.Log.i("ACE_STARTUP", "ACE_STARTUP: installation_state=${if (isInstalled) "INSTALLED" else "NOT_INSTALLED"}")
+        android.util.Log.i("ACE_STARTUP", "ACE_STARTUP: authentication_state=${if (isOnboarded) "AUTHENTICATED" else "UNAUTHENTICATED"}")
+        android.util.Log.i("ACE_STARTUP", "ACE_STARTUP: selected_model_state=${com.ace.app.brain.model.ModelRepository.getRegisteredModelPath(context) ?: "NONE"}")
+        android.util.Log.i("ACE_STARTUP", "ACE_STARTUP: model_readiness_state=${if (brainReady) "READY" else "NOT_READY"}")
+        android.util.Log.i("ACE_STARTUP", "ACE_STARTUP: chosen_navigation_destination=$dest")
+
+        dest
     }
 
     NavHost(
@@ -84,7 +100,10 @@ fun AceApp() {
                     navController.navigate("email_login")
                 },
                 onAuthSuccess = {
-                    navController.navigate("home") {
+                    com.ace.app.brain.model.OnboardingManager.setOnboardingComplete(context, true)
+                    val isModelSetup = com.ace.app.brain.model.OnboardingManager.isModelSetupComplete(context)
+                    val target = if (isModelSetup) "home" else "model_setup"
+                    navController.navigate(target) {
                         popUpTo("welcome") {
                             inclusive = true
                         }
@@ -99,7 +118,10 @@ fun AceApp() {
                     navController.navigateUp()
                 },
                 onAuthSuccess = {
-                    navController.navigate("home") {
+                    com.ace.app.brain.model.OnboardingManager.setOnboardingComplete(context, true)
+                    val isModelSetup = com.ace.app.brain.model.OnboardingManager.isModelSetupComplete(context)
+                    val target = if (isModelSetup) "home" else "model_setup"
+                    navController.navigate(target) {
                         popUpTo("welcome") {
                             inclusive = true
                         }
@@ -111,6 +133,7 @@ fun AceApp() {
         composable("model_setup") {
             ModelSetupScreen(
                 onModelReady = {
+                    com.ace.app.brain.model.OnboardingManager.setModelSetupComplete(context, true)
                     navController.navigate("home") {
                         popUpTo("model_setup") {
                             inclusive = true
@@ -118,6 +141,7 @@ fun AceApp() {
                     }
                 },
                 onSignOutClick = {
+                    com.ace.app.brain.model.OnboardingManager.clearAll(context)
                     navController.navigate("welcome") {
                         popUpTo(0) {
                             inclusive = true

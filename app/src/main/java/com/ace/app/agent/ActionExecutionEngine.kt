@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.ace.app.accessibility.AceAccessibilityService
 import com.ace.app.accessibility.UniversalAppInteractionEngine
+import com.ace.app.agent.CapabilityRegistry
 import com.ace.app.utils.NetworkUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -60,13 +61,50 @@ class ActionExecutionEngine(private val context: Context?) {
             )
         }
 
-        val targetApp = (params["appName"] ?: params["app"] ?: "").trim()
+        val targetApp = (params["targetApp"] ?: params["appName"] ?: params["app"] ?: "").trim()
         val query = (params["query"] ?: params["text"] ?: params["song"] ?: params["track"] ?: "").trim()
         val isBrowserApp = targetApp.lowercase().contains("chrome") || targetApp.lowercase().contains("browser")
 
         // 1. Accessibility Service & Universal Interaction Engine (for in-app UI automation in non-browser native apps)
-        if (!isBrowserApp && targetApp.isNotBlank() && query.isNotBlank() && (universalAction == "SEARCH" || universalAction == "TYPE_TEXT" || universalAction == "SEARCH_IN_APP" || universalAction == "PLAY_MEDIA")) {
-            Log.i("ACE_ACCESSIBILITY", "ACE_ACCESSIBILITY: attempting UniversalAppInteractionEngine in-app execution for app=$targetApp query='$query'")
+        if (!isBrowserApp && targetApp.isNotBlank() && (universalAction == "SEARCH" || universalAction == "TYPE_TEXT" || universalAction == "SEARCH_IN_APP" || universalAction == "UNIVERSAL_SEARCH" || rawCapId == "universal_search" || universalAction == "PLAY_MEDIA")) {
+            Log.i("ACE_ACCESSIBILITY", "ACE_ACCESSIBILITY: attempting in-app execution for app=$targetApp action=$universalAction query='$query'")
+
+            if (universalAction == "PLAY_MEDIA") {
+                // Phase 1: Try Generic Direct Media Intent Routing Layer
+                val directResult = GenericMediaRouteResolver.executeDirectMediaRoute(context, targetApp, query)
+                if (directResult != null && directResult.isVerified) {
+                    val output = mapOf("targetApp" to targetApp, "query" to query, "evidence" to (directResult.evidenceText ?: ""))
+                    return ActionResult(
+                        status = directResult.status,
+                        message = directResult.summary,
+                        backendUsed = "Generic Direct Media Intent Backend",
+                        outputData = output
+                    )
+                }
+
+                // Phase 2: Direct route failed/unverified -> Fallback to Universal UI Search Engine
+                com.ace.app.utils.AceLatencyTracker.recordStage("UI_SEARCH_FALLBACK")
+                Log.i("ACE_MEDIA", "ACE_MEDIA: direct media route unverified — falling back to Universal Accessibility UI Engine")
+                if (!AceAccessibilityService.isServiceEnabled(context)) {
+                    Log.w("ACE_FALLBACK", "ACE_FALLBACK: accessibility service disabled")
+                    return ActionResult(
+                        status = ActionResultStatus.NEEDS_USER_ACTION,
+                        message = "ACE Accessibility Service is required to perform in-app interactions inside $targetApp. Please enable ACE in Accessibility Settings.",
+                        backendUsed = "Universal Accessibility UI Automation Engine",
+                        error = "ACCESSIBILITY_DISABLED"
+                    )
+                }
+                val verifyResult = universalInteractionEngine.executeInAppPlayMedia(context, targetApp, query)
+                val output = mapOf("targetApp" to targetApp, "query" to query, "evidence" to (verifyResult.evidenceText ?: ""))
+                return ActionResult(
+                    status = verifyResult.status,
+                    message = verifyResult.summary,
+                    backendUsed = "Universal Accessibility UI Automation Engine",
+                    outputData = output,
+                    error = if (!verifyResult.isVerified) verifyResult.evidenceText ?: "In-app playback unverified" else null
+                )
+            }
+
             if (!AceAccessibilityService.isServiceEnabled(context)) {
                 Log.w("ACE_FALLBACK", "ACE_FALLBACK: accessibility service disabled, falling back or reporting user action required")
                 return ActionResult(

@@ -21,6 +21,7 @@ import com.ace.app.voice.VoiceState
 private val PurpleCore = Color(0xFF9D6BFF)
 private val CyanGlow = Color(0xFF00F0FF)
 private val MagentaGlow = Color(0xFFFF007A)
+private val AmberWorking = Color(0xFFFFB800)
 private val DeepIndigo = Color(0xFF19102E)
 
 @Composable
@@ -33,13 +34,20 @@ fun AstraVoiceOrb(
 
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 0.92f,
-        targetValue = if (voiceState == VoiceState.LISTENING || voiceState == VoiceState.SPEAKING) 1.18f else 1.05f,
+        targetValue = when (voiceState) {
+            VoiceState.LISTENING -> 1.18f
+            VoiceState.SPEAKING -> 1.15f
+            VoiceState.EXECUTING -> 1.12f
+            VoiceState.THINKING -> 1.08f
+            else -> 1.05f
+        },
         animationSpec = infiniteRepeatable(
             animation = tween(
                 durationMillis = when (voiceState) {
-                    VoiceState.LISTENING -> 800
-                    VoiceState.SPEAKING -> 600
                     VoiceState.THINKING -> 400
+                    VoiceState.EXECUTING -> 500
+                    VoiceState.SPEAKING -> 600
+                    VoiceState.LISTENING -> 800
                     else -> 1500
                 },
                 easing = FastOutSlowInEasing
@@ -81,6 +89,7 @@ fun AstraVoiceOrb(
                         VoiceState.LISTENING -> CyanGlow.copy(alpha = 0.5f)
                         VoiceState.SPEAKING -> MagentaGlow.copy(alpha = 0.5f)
                         VoiceState.THINKING -> PurpleCore.copy(alpha = 0.7f)
+                        VoiceState.EXECUTING -> AmberWorking.copy(alpha = 0.6f)
                         else -> PurpleCore.copy(alpha = 0.3f)
                     },
                     Color.Transparent
@@ -96,6 +105,7 @@ fun AstraVoiceOrb(
                     VoiceState.LISTENING -> CyanGlow
                     VoiceState.SPEAKING -> MagentaGlow
                     VoiceState.THINKING -> PurpleCore
+                    VoiceState.EXECUTING -> AmberWorking
                     else -> Color(0xFF6E47D5)
                 }.copy(alpha = 0.8f),
                 radius = baseRadius * 1.15f,
@@ -133,7 +143,7 @@ fun AstraVoiceOrb(
             Text(
                 text = when (voiceState) {
                     VoiceState.LISTENING -> "Listening..."
-                    VoiceState.SPEAKING -> "ACE is speaking..."
+                    VoiceState.SPEAKING -> "ACE speaks..."
                     VoiceState.THINKING -> "Thinking..."
                     VoiceState.EXECUTING -> "Working..."
                     VoiceState.IDLE -> "Tap to speak"

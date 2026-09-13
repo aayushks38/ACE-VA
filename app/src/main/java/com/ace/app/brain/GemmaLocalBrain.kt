@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.ace.app.agent.*
+import com.ace.app.agent.CapabilityRegistry
 import com.ace.app.brain.model.ModelRepository
 import com.ace.app.brain.model.ModelValidationResult
 import com.ace.app.brain.native.LlamaBridge
@@ -236,20 +237,25 @@ class GemmaLocalBrain : LocalBrain {
         brainState.set(BrainState.GENERATING)
         activeGeneration.set(generationId)
 
+        com.ace.app.utils.AceLatencyTracker.mark("nlu_start")
+        com.ace.app.utils.AceLatencyTracker.recordGemmaCall()
         Log.i(TAG_BRAIN, "ACE_BRAIN: instance=$instanceId submitting generationId=$generationId for goal='$cleanGoal'")
         Log.i(TAG_INF, "ACE_INFERENCE: generationId=$generationId started")
         Log.i(TAG_INF, "ACE_INFERENCE: submitting prompt to Gemma")
 
         val bridge = llamaBridge!!
+        com.ace.app.utils.AceLatencyTracker.mark("gemma_prompt_start")
         val prompt = buildStructuredPrompt(cleanGoal, contextInput)
+        com.ace.app.utils.AceLatencyTracker.mark("gemma_prompt_end")
 
         Log.i(TAG_INF, "ACE_INFERENCE: Prompt submitted to GGUF runtime:\n$prompt")
 
-        // PHASE 6 — STRICT INFERENCE TIMEOUT
+        // Bounded maxTokens = 48 for fast structured JSON intent extraction
         val maxInferenceTimeoutMs = 180_000L // 3 minutes max total inference timeout
+        com.ace.app.utils.AceLatencyTracker.mark("gemma_generation_start")
         val modelOutput = try {
             kotlinx.coroutines.withTimeout(maxInferenceTimeoutMs) {
-                bridge.generate(prompt, maxTokens = 384)
+                bridge.generate(prompt, maxTokens = 48)
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             Log.e(TAG_ERR, "ACE_ERROR: Inference exceeded timeout limit ($maxInferenceTimeoutMs ms) for generationId=$generationId")
@@ -257,6 +263,8 @@ class GemmaLocalBrain : LocalBrain {
             brainState.set(BrainState.READY)
             return@withContext BrainResult.Error("Inference request timed out on device ($maxInferenceTimeoutMs ms limit exceeded).")
         }
+        com.ace.app.utils.AceLatencyTracker.mark("gemma_generation_end")
+        com.ace.app.utils.AceLatencyTracker.mark("nlu_end")
 
         if (activeGeneration.get() != generationId) {
             Log.i(TAG_INF, "ACE_INFERENCE: generationId=$generationId cancelled during generation run")
@@ -272,11 +280,13 @@ class GemmaLocalBrain : LocalBrain {
 
         Log.i(TAG_INF, "ACE_INFERENCE: Raw Gemma GGUF LLM generated text:\n$modelOutput")
         Log.i("ACE_MODEL_OUTPUT", "ACE_MODEL_OUTPUT: $modelOutput")
+        Log.i("ACE_NLU", "ACE_GEMMA_OUTPUT=$modelOutput")
         Log.i(TAG_INF, "ACE_INFERENCE: generationId=$generationId completed")
 
         Log.i(TAG_PLAN, "ACE_PLAN: parsing model response")
         val parsedPlan = parseModelOutputToPlan(cleanGoal, modelOutput)
         brainState.set(BrainState.READY)
+        com.ace.app.utils.AceLatencyTracker.mark("plan_ready")
 
         if (parsedPlan != null && parsedPlan.steps.isNotEmpty()) {
             Log.i(TAG_PLAN, "ACE_PLAN: parsed steps=${parsedPlan.steps.size}")
@@ -318,29 +328,114 @@ class GemmaLocalBrain : LocalBrain {
         brainState.set(BrainState.UNINITIALIZED)
     }
 
-    /**
-     * Concise Gemma 3n chat-formatted prompt for fast ARM CPU prefill.
-     * Instructs Gemma to produce structured JSON plans for capabilities.
-     */
-    private fun buildStructuredPrompt(goal: String, contextInput: String): String {
-        return buildString {
+    override val backendType: ReasoningBackend = ReasoningBackend.LOCAL_GEMMA
+
+    override suspend fun reasonNextDecision(
+        goal: String,
+        observation: ScreenObservation,
+        context: com.ace.app.agent.AgentTaskContext,
+        generationId: Long
+    ): AgentDecision = withContext(Dispatchers.IO) {
+        val cleanGoal = goal.trim()
+        val instanceId = System.identityHashCode(this@GemmaLocalBrain)
+        Log.i(TAG_BRAIN, "ACE_BRAIN: reasonNextDecision called instance=$instanceId app=${observation.appName} state=${observation.screenState}")
+
+        if (llamaBridge == null || !isReady()) {
+            Log.w(TAG_INF, "ACE_INFERENCE: Brain not READY. Using heuristic perception fallback.")
+            return@withContext ScreenObservationEngine.determineNextActionHeuristic(cleanGoal, observation)
+        }
+
+        val compactUi = ScreenObservationEngine.formatCompactUiRepresentation(cleanGoal, observation)
+        val prompt = buildString {
             append("<start_of_turn>user\n")
-            append("Goal: $goal\n")
-            append("Tools: ui_open_app, phone_dialer, whatsapp_call, web_search, text_reasoning\n")
-            append("Return JSON: [{\"capability\":\"ui_open_app\",\"inputParams\":{\"appName\":\"whatsapp\"}}]\n")
-            append("<end_of_turn>\n<start_of_turn>model\n[")
+            append("You are ACE, an autonomous computer-use agent for Android.\n")
+            append("Goal: $cleanGoal\n")
+            append("Current Observation:\n$compactUi\n")
+            append("Choose SINGLE next decision. Return compact JSON:\n")
+            append("If underspecified: {\"status\":\"CLARIFY\",\"question\":\"<question>\"}\n")
+            append("If goal achieved: {\"status\":\"DONE\",\"reason\":\"<evidence>\"}\n")
+            append("If action needed: {\"status\":\"CONTINUE\",\"action\":\"<ui_click|ui_type|ui_scroll|web_open_url|ui_open_app>\",\"target\":\"<element>\",\"text\":\"<input_text>\"}\n")
+            append("<end_of_turn>\n<start_of_turn>model\n{")
+        }
+
+        val rawOutput = try {
+            val bridge = llamaBridge
+            if (bridge != null) (bridge.generate(prompt, maxTokens = 64) ?: "") else ""
+        } catch (e: Exception) {
+            Log.e(TAG_ERR, "ACE_ERROR: Error during reasonNextDecision inference: ${e.message}")
+            ""
+        }
+
+        Log.i(TAG_INF, "ACE_INFERENCE: reasonNextDecision LLM output: \"$rawOutput\"")
+        parseAgentDecision(cleanGoal, rawOutput, observation)
+    }
+
+    private fun parseAgentDecision(goal: String, rawOutput: String, observation: ScreenObservation): AgentDecision {
+        val trimmed = rawOutput.trim()
+        if (trimmed.isBlank()) {
+            return ScreenObservationEngine.determineNextActionHeuristic(goal, observation)
+        }
+
+        return try {
+            val jsonCandidate = if (!trimmed.startsWith("{")) "{$trimmed" else trimmed
+            val sStart = jsonCandidate.indexOf('{')
+            val sEnd = jsonCandidate.lastIndexOf('}')
+            if (sStart != -1 && sEnd > sStart) {
+                val jsonStr = jsonCandidate.substring(sStart, sEnd + 1)
+                val json = JSONObject(jsonStr)
+                val status = json.optString("status", "CONTINUE").uppercase()
+                when {
+                    status == "CLARIFY" || json.optBoolean("clarificationNeeded", false) -> {
+                        val q = json.optString("question", "Could you clarify what you'd like me to do?")
+                        AgentDecision.Clarify(q)
+                    }
+                    status == "DONE" || status == "COMPLETE" || status == "VERIFIED" -> {
+                        AgentDecision.Complete(json.optString("reason", "Goal satisfied"))
+                    }
+                    else -> {
+                        val act = json.optString("action", json.optString("primitive", "ui_click"))
+                        val tgt = json.optString("target", json.optString("element", ""))
+                        val txt = json.optString("text", json.optString("query", ""))
+                        AgentDecision.Action(act, tgt, txt)
+                    }
+                }
+            } else {
+                // Robustness Guarantee: Natural language output is treated as a conversational response, NEVER a parsing failure!
+                Log.i(TAG_BRAIN, "ACE_BRAIN: Model emitted natural language response: \"$trimmed\"")
+                AgentDecision.ConversationalResponse(trimmed)
+            }
+        } catch (_: Exception) {
+            Log.i(TAG_BRAIN, "ACE_BRAIN: Robust fallback converting output to conversational response: \"$trimmed\"")
+            AgentDecision.ConversationalResponse(trimmed)
         }
     }
 
     /**
-     * Parses Gemma's LLM output JSON into an AgentPlan, validating each capabilityId.
+     * Concise Gemma 3n chat-formatted prompt for fast ARM CPU prefill.
+     * Instructs Gemma to produce universal compact JSON goal objects for General Computer Use.
+     */
+    private fun buildStructuredPrompt(goal: String, contextInput: String): String {
+        return buildString {
+            append("<start_of_turn>user\n")
+            append("You are ACE, a General Autonomous Computer-Use Agent for Android.\n")
+            append("User Goal: $goal\n")
+            if (contextInput.isNotBlank()) append("Context: $contextInput\n")
+            append("Return compact JSON object:\n")
+            append("If underspecified or ambiguous: {\"clarificationNeeded\":true,\"question\":\"<question>\"}\n")
+            append("If computer-use/web task: {\"goal\":\"<web_task|play_media|search|send_message|open_app|phone_call>\",\"target\":\"<appNameOrWebsite>\",\"query\":\"<query>\",\"url\":\"<url>\",\"recipient\":\"<name>\",\"message\":\"<text>\"}\n")
+            append("<end_of_turn>\n<start_of_turn>model\n{")
+        }
+    }
+
+    /**
+     * Parses Gemma's LLM output JSON into an AgentPlan, mapping universal goals to execution steps.
      */
     private fun parseModelOutputToPlan(userGoal: String, output: String): AgentPlan? {
         Log.i("ACE_PARSE", "ACE_PARSE: raw_output=\"$output\"")
         var fallbackUsed = false
         val plan = try {
             val rawTrimmed = output.trim()
-            val trimmed = if (!rawTrimmed.startsWith("[") && !rawTrimmed.startsWith("{")) "[$rawTrimmed" else rawTrimmed
+            val trimmed = if (!rawTrimmed.startsWith("{") && !rawTrimmed.startsWith("[")) "{$rawTrimmed" else rawTrimmed
             val jsonStart = trimmed.indexOfAny(charArrayOf('{', '['))
             val jsonEnd = trimmed.lastIndexOfAny(charArrayOf('}', ']'))
             if (jsonStart == -1 || jsonEnd == -1 || jsonEnd <= jsonStart) {
@@ -372,13 +467,159 @@ class GemmaLocalBrain : LocalBrain {
                     parseStepsArray(stepsArray, stepsList)
                 } else {
                     val json = JSONObject(jsonString)
-                    intentStr = json.optString("intent", "general")
-                    val stepsArray = json.optJSONArray("steps")
-                    if (stepsArray != null && stepsArray.length() > 0) {
-                        parseStepsArray(stepsArray, stepsList)
-                    } else if (json.has("capability") || json.has("capabilityId") || json.has("tool") || json.has("action")) {
-                        val singleStep = parseSingleStepObject(json, 1)
-                        if (singleStep != null) stepsList.add(singleStep)
+                    
+                    if (json.optBoolean("clarificationNeeded", false) || json.optString("goal") == "clarification") {
+                        val q = json.optString("question", json.optString("clarificationQuestion", "Could you clarify what you'd like me to do?"))
+                        return AgentPlan(
+                            userGoal = userGoal,
+                            intent = "clarification",
+                            steps = emptyList(),
+                            clarificationNeeded = true,
+                            clarificationQuestion = q
+                        )
+                    }
+
+                    val goalType = json.optString("goal", json.optString("action", json.optString("intent", "general"))).lowercase()
+                    val targetApp = json.optString("target", json.optString("targetApp", json.optString("appName", "")))
+                    val queryVal = json.optString("query", json.optString("text", ""))
+                    val recipientVal = json.optString("recipient", json.optString("contact", json.optString("contactName", "")))
+                    val messageVal = json.optString("message", json.optString("text", ""))
+
+                    intentStr = goalType
+
+                    when (goalType) {
+                        "web_task", "web", "website", "url" -> {
+                            val rawUrl = json.optString("url", targetApp)
+                            val formattedUrl = if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) "https://$rawUrl" else rawUrl
+                            val searchTarget = queryVal.ifBlank { userGoal }
+                            stepsList.add(
+                                TaskStep(
+                                    id = "step_1_url",
+                                    label = "Open $rawUrl",
+                                    capabilityId = "web_open_url",
+                                    inputParams = mapOf("url" to formattedUrl, "query" to formattedUrl)
+                                )
+                            )
+                            if (searchTarget.isNotBlank()) {
+                                stepsList.add(
+                                    TaskStep(
+                                        id = "step_2_search",
+                                        label = "Find '$searchTarget' on $rawUrl",
+                                        capabilityId = "universal_search",
+                                        dependsOnStepIds = listOf("step_1_url"),
+                                        inputParams = mapOf("query" to searchTarget, "url" to formattedUrl, "action" to "SEARCH")
+                                    )
+                                )
+                            }
+                        }
+
+                        "send_message", "whatsapp_send", "message" -> {
+                            val target = targetApp.ifBlank { "WhatsApp" }
+                            val openId = "step_1_open"
+                            val typeId = "step_2_type"
+                            stepsList.add(
+                                TaskStep(
+                                    id = openId,
+                                    label = "Open $target",
+                                    capabilityId = "ui_open_app",
+                                    inputParams = mapOf("app" to target, "appName" to target, "targetApp" to target, "recipient" to recipientVal)
+                                )
+                            )
+                            stepsList.add(
+                                TaskStep(
+                                    id = typeId,
+                                    label = "Type message to $recipientVal",
+                                    capabilityId = "ui_type",
+                                    dependsOnStepIds = listOf(openId),
+                                    inputParams = mapOf("text" to messageVal, "query" to messageVal, "recipient" to recipientVal, "targetApp" to target)
+                                )
+                            )
+                            stepsList.add(
+                                TaskStep(
+                                    id = "step_3_click",
+                                    label = "Click Send",
+                                    capabilityId = "ui_click",
+                                    dependsOnStepIds = listOf(typeId),
+                                    inputParams = mapOf("text" to "send", "target" to "send", "targetApp" to target)
+                                )
+                            )
+                        }
+                        "play_media", "play", "music" -> {
+                            val target = targetApp.ifBlank { "Spotify" }
+                            val mediaQuery = queryVal.ifBlank { userGoal.replace(Regex("(?i)^(play|listen to)\\s+"), "").trim() }
+                            stepsList.add(
+                                TaskStep(
+                                    id = "step_1_play",
+                                    label = "Play '$mediaQuery' on $target",
+                                    capabilityId = "media_playback",
+                                    inputParams = mapOf("query" to mediaQuery, "song" to mediaQuery, "targetApp" to target, "appName" to target, "action" to "PLAY_MEDIA")
+                                )
+                            )
+                        }
+                        "search", "app_search", "find" -> {
+                            if (targetApp.isNotBlank()) {
+                                stepsList.add(
+                                    TaskStep(
+                                        id = "step_1_search",
+                                        label = "Search '$queryVal' in $targetApp",
+                                        capabilityId = "universal_search",
+                                        inputParams = mapOf("query" to queryVal, "targetApp" to targetApp, "appName" to targetApp, "action" to "SEARCH")
+                                    )
+                                )
+                            } else {
+                                stepsList.add(
+                                    TaskStep(
+                                        id = "step_1_search",
+                                        label = "Search '$queryVal'",
+                                        capabilityId = "web_search",
+                                        inputParams = mapOf("query" to queryVal, "action" to "SEARCH")
+                                    )
+                                )
+                            }
+                        }
+                        "open_app", "open", "launch" -> {
+                            val target = targetApp.ifBlank { userGoal.replace(Regex("(?i)^(open|launch)\\s+"), "").trim() }
+                            stepsList.add(
+                                TaskStep(
+                                    id = "step_1_open",
+                                    label = "Open $target",
+                                    capabilityId = "ui_open_app",
+                                    inputParams = mapOf("app" to target, "appName" to target, "targetApp" to target)
+                                )
+                            )
+                        }
+                        "phone_call", "call" -> {
+                            val contact = recipientVal.ifBlank { targetApp.ifBlank { queryVal } }
+                            val lookupId = "step_1_lookup"
+                            stepsList.add(
+                                TaskStep(
+                                    id = lookupId,
+                                    label = "Lookup contact '$contact'",
+                                    capabilityId = "contact_lookup",
+                                    inputParams = mapOf("query" to contact, "contact" to contact)
+                                )
+                            )
+                            stepsList.add(
+                                TaskStep(
+                                    id = "step_2_call",
+                                    label = "Call '$contact'",
+                                    capabilityId = "phone_call",
+                                    dependsOnStepIds = listOf(lookupId),
+                                    inputParams = mapOf("contactName" to contact)
+                                )
+                            )
+                        }
+                        else -> {
+                            if (json.has("steps")) {
+                                val stepsArray = json.optJSONArray("steps")
+                                if (stepsArray != null && stepsArray.length() > 0) {
+                                    parseStepsArray(stepsArray, stepsList)
+                                }
+                            } else if (json.has("capability") || json.has("capabilityId") || json.has("tool")) {
+                                val singleStep = parseSingleStepObject(json, 1)
+                                if (singleStep != null) stepsList.add(singleStep)
+                            }
+                        }
                     }
                 }
 
@@ -479,16 +720,16 @@ class GemmaLocalBrain : LocalBrain {
             "type", "input", "write" -> "ui_type"
             "scroll", "swipe" -> "ui_scroll"
             "press_button", "button" -> "ui_press_button"
+            "search", "universal_search", "app_search" -> "universal_search"
             "play", "music", "youtube", "spotify" -> "media_playback"
             "location", "gps" -> "current_location"
             "route", "directions", "navigation" -> "route_directions"
             "contact", "contact_lookup", "find_contact" -> "contact_lookup"
             "call", "dial", "phone", "phone_dialer" -> "phone_dialer"
             "whatsapp", "whatsapp_call", "message" -> "whatsapp_call"
-            "search", "google", "web_search", "web" -> "web_search"
             "reasoning", "explain", "text_reasoning", "explanation" -> "text_reasoning"
             else -> raw
         }
-        return if (CapabilityRegistry.isRegistered(mapped)) mapped else "text_reasoning"
+        return if (CapabilityRegistry.isRegistered(mapped)) mapped else "universal_search"
     }
 }

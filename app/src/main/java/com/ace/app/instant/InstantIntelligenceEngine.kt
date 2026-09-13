@@ -6,6 +6,7 @@ import android.util.Log
 object InstantIntelligenceEngine {
 
     private val capabilities: List<InstantCapability> = listOf(
+        CalculatorInstantCapability(),
         DateAndTimeInstantCapability(),
         BatteryInstantCapability(),
         StorageInstantCapability(),

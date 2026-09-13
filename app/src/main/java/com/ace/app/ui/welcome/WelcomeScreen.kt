@@ -29,11 +29,13 @@ fun WelcomeScreen(
     val context = LocalContext.current
     val activity = context as? FragmentActivity
 
-    LaunchedEffect(uiState.isAuthenticated) {
-        println("ACE DEBUG: isAuthenticated = ${uiState.isAuthenticated}")
+    LaunchedEffect(Unit) {
+        android.util.Log.i("ACE_ONBOARDING", "ACE_ONBOARDING: entered login")
+    }
 
+    LaunchedEffect(uiState.isAuthenticated) {
         if (uiState.isAuthenticated) {
-            println("ACE DEBUG: Navigating to home")
+            android.util.Log.i("ACE_ONBOARDING", "ACE_ONBOARDING: login completed")
             onAuthSuccess()
         }
     }

@@ -58,10 +58,11 @@ object AceTaskSessionManager {
         Log.i("ACE_TTS", "ACE_TTS: speech stopped")
         Log.i("ACE_TTS", "ACE_TTS: stopped_by_barge_in=true")
 
-        // 3. Clear conversation / task context of cancelled task
-        AceConversationContext.clearCancelledContext()
+        // 3. Clear conversation / task context completely for fresh task session
+        AceConversationContext.clearSession()
 
         Log.i("ACE_ROUTER", "ACE_ROUTER: processing newest command")
+        Log.i("ACE_TASK", "ACE_TASK: generation=$newGenId goal=\"$newGoal\"")
         Log.i("ACE_TASK", "ACE_TASK: active_task_id=task_$newGenId")
 
         return newGenId
@@ -69,11 +70,16 @@ object AceTaskSessionManager {
 
     fun isCurrentGeneration(generationId: Long): Boolean {
         if (generationId == 0L) return true
-        return generationId == currentGenerationId.get()
+        val matches = generationId == currentGenerationId.get()
+        if (!matches) {
+            Log.w("ACE_TASK", "ACE_TASK: STALE_REJECTED eventGeneration=$generationId currentGeneration=${currentGenerationId.get()}")
+        }
+        return matches
     }
 
     fun validateOrDiscard(generationId: Long, sourceTag: String): Boolean {
         if (generationId != 0L && generationId != currentGenerationId.get()) {
+            Log.w("ACE_TASK", "ACE_TASK: STALE_REJECTED eventGeneration=$generationId currentGeneration=${currentGenerationId.get()}")
             Log.w("ACE_TASK", "ACE_TASK: stale_result_detected")
             Log.w("ACE_TASK", "ACE_TASK: generation_mismatch")
             Log.w("ACE_TASK", "ACE_TASK: stale_result_discarded=true")

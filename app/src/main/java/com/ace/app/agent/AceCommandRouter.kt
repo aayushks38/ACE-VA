@@ -29,6 +29,7 @@ sealed class CommandRoute {
 class AceCommandRouter {
 
     fun route(goal: String, brainAvailable: Boolean = false): CommandRoute {
+        com.ace.app.utils.AceLatencyTracker.recordStage("T1")
         val clean = goal.replace("_", " ").trim()
 
         if (clean.isBlank()) {
@@ -88,39 +89,60 @@ class AceCommandRouter {
             Log.i("ACE_INSTANT", "ACE_INSTANT: capability=${instantCap.id}")
             Log.i("ACE_DEVICE", "ACE_DEVICE: source=${instantCap.source}")
             Log.i("ACE_ROUTER", "ACE_ROUTER: GEMMA_BYPASSED=true")
+            com.ace.app.utils.AceLatencyTracker.recordStage("T2")
             return CommandRoute.Fast(result, plan)
         }
 
-        // Split by compound separators: commas, "and then", "then", "after that", "next", "followed by", "and"
+        // LEVEL 1: EXPLICIT DIRECT ACTIONS (Priority 2: Direct bypass for open app, flashlight, volume, settings)
         val subCommands = clean.split(Regex("""\s*,\s*|\b(and then|after that|followed by|then|next|and)\b""", RegexOption.IGNORE_CASE))
             .map { it.trim() }
             .filter { it.isNotBlank() }
 
         val complexity = subCommands.size
 
-        // Level 1: SINGLE FAST ACTION
         if (complexity == 1) {
             val singleSteps = resolveSubCommand(subCommands[0], 1).ifEmpty { resolveSubCommand(normalized, 1) }
             if (singleSteps.isNotEmpty()) {
-                val plan = AgentPlan(
-                    userGoal = clean,
-                    intent = singleSteps.first().capabilityId,
-                    channel = CommunicationChannel.PHONE,
-                    targetEntity = singleSteps.first().inputParams["appName"] ?: singleSteps.first().inputParams["contactName"],
-                    steps = singleSteps
-                )
-                val result = RoutingResult(
-                    route = RouteType.FAST_ACTION,
-                    confidence = 1.0f,
-                    workflow = plan,
-                    reason = "single_fast_action",
-                    executionMode = ExecutionMode.DETERMINISTIC,
-                    brainRequired = false,
-                    brainAvailable = brainAvailable
-                )
-                logRouting(clean, 1, true, RouteType.FAST_ACTION, true, "single_fast_action", ExecutionMode.DETERMINISTIC, false, brainAvailable)
-                return CommandRoute.Fast(result, plan)
+                val firstCap = singleSteps.first().capabilityId
+                val isDirectAction = firstCap == "ui_open_app" || firstCap == "flashlight" || firstCap == "system_volume" || firstCap == "system_settings" || firstCap == "web_open_url" || firstCap == "universal_search" || firstCap == "media_playback" || firstCap == "play_media" || firstCap == "set_alarm"
+                if (isDirectAction) {
+                    val plan = AgentPlan(
+                        userGoal = clean,
+                        intent = firstCap,
+                        channel = CommunicationChannel.PHONE,
+                        targetEntity = singleSteps.first().inputParams["appName"] ?: singleSteps.first().inputParams["url"],
+                        steps = singleSteps
+                    )
+                    val result = RoutingResult(
+                        route = RouteType.FAST_ACTION,
+                        confidence = 1.0f,
+                        workflow = plan,
+                        reason = "explicit_direct_action",
+                        executionMode = ExecutionMode.DETERMINISTIC,
+                        brainRequired = false,
+                        brainAvailable = brainAvailable
+                    )
+                    logRouting(clean, 1, true, RouteType.FAST_ACTION, true, "explicit_direct_action", ExecutionMode.DETERMINISTIC, false, brainAvailable)
+                    com.ace.app.utils.AceLatencyTracker.recordStage("T2")
+                    return CommandRoute.Fast(result, plan)
+                }
             }
+        }
+
+        // LEVEL 2: GENERAL-PURPOSE NLU BRAIN ROUTING (Priority 3: Gemma General Agent)
+        // When Gemma brain is loaded and available, route complex/natural language goals to Gemma
+        if (brainAvailable) {
+            val result = RoutingResult(
+                route = RouteType.DEEP_BRAIN,
+                confidence = 0.95f,
+                workflow = null,
+                reason = "nlu_brain_available",
+                executionMode = ExecutionMode.BRAIN,
+                brainRequired = true,
+                brainAvailable = true
+            )
+            logRouting(clean, complexity, false, RouteType.DEEP_BRAIN, false, "nlu_brain_available", ExecutionMode.BRAIN, true, true)
+            return CommandRoute.DeepBrain(result)
         }
 
         // Level 2: STRUCTURED CAPABILITY WORKFLOWS (Pattern Extraction)
@@ -163,10 +185,11 @@ class AceCommandRouter {
                 val processedSteps = steps.map { step ->
                     val appInStep = step.inputParams["app"] ?: step.inputParams["appName"]
                     if (!appInStep.isNullOrBlank()) activeApp = appInStep
-                    if ((step.capabilityId == "web_search" || step.capabilityId == "media_playback") && !activeApp.isNullOrBlank() && !step.inputParams.containsKey("app")) {
+                    val currentApp = activeApp
+                    if ((step.capabilityId == "web_search" || step.capabilityId == "media_playback") && !currentApp.isNullOrBlank() && !step.inputParams.containsKey("app")) {
                         val newParams = step.inputParams.toMutableMap()
-                        newParams["app"] = activeApp!!
-                        newParams["appName"] = activeApp!!
+                        newParams["app"] = currentApp
+                        newParams["appName"] = currentApp
                         step.copy(inputParams = newParams)
                     } else {
                         step
@@ -281,14 +304,24 @@ class AceCommandRouter {
 
         // C. WEB SEARCH & MEDIA PLAYBACK
         if (lower.startsWith("play ") || lower.startsWith("listen to ")) {
-            val track = extractTarget(subCmd, listOf("play song ", "play music ", "play ", "listen to "))
-            if (track.isNotBlank()) {
+            val trackFull = extractTarget(subCmd, listOf("play song ", "play music ", "play ", "listen to "))
+            if (trackFull.isNotBlank()) {
+                val qualified = extractAppQualifier(trackFull)
+                val targetApp = qualified?.canonicalAppName ?: "Spotify"
+                val trackQuery = qualified?.cleanQuery ?: trackFull
                 return listOf(
                     TaskStep(
                         id = "step_$startStepIdx",
-                        label = "Play '$track'",
+                        label = "Play '$trackQuery' on $targetApp",
                         capabilityId = "media_playback",
-                        inputParams = mapOf("query" to track, "track" to track, "song" to track)
+                        inputParams = mapOf(
+                            "query" to trackQuery,
+                            "song" to trackQuery,
+                            "track" to trackQuery,
+                            "appName" to targetApp,
+                            "targetApp" to targetApp,
+                            "action" to "PLAY_MEDIA"
+                        )
                     )
                 )
             }
@@ -300,6 +333,23 @@ class AceCommandRouter {
                 query = query.substring(4).trim()
             }
             if (query.isNotBlank()) {
+                val qualified = extractAppQualifier(query)
+                if (qualified != null) {
+                    return listOf(
+                        TaskStep(
+                            id = "step_$startStepIdx",
+                            label = "Search '${qualified.cleanQuery}' in ${qualified.canonicalAppName}",
+                            capabilityId = "universal_search",
+                            inputParams = mapOf(
+                                "query" to qualified.cleanQuery,
+                                "targetApp" to qualified.canonicalAppName,
+                                "appName" to qualified.canonicalAppName,
+                                "action" to "SEARCH"
+                            )
+                        )
+                    )
+                }
+
                 return listOf(
                     TaskStep(
                         id = "step_$startStepIdx",
@@ -335,17 +385,15 @@ class AceCommandRouter {
                     
                     return listOf(
                         TaskStep(
-                            id = "step_${startStepIdx}_open",
-                            label = "Open $appName",
-                            capabilityId = "ui_open_app",
-                            inputParams = mapOf("app" to appName.lowercase(), "appName" to appName)
-                        ),
-                        TaskStep(
-                            id = "step_${startStepIdx + 1}_search",
-                            label = "Search for \"$searchTerm\" in $appName",
-                            capabilityId = "ui_type",
-                            dependsOnStepIds = listOf("step_${startStepIdx}_open"),
-                            inputParams = mapOf("text" to searchTerm, "query" to searchTerm)
+                            id = "step_$startStepIdx",
+                            label = "Search '$searchTerm' in $appName",
+                            capabilityId = "universal_search",
+                            inputParams = mapOf(
+                                "query" to searchTerm,
+                                "targetApp" to appName,
+                                "appName" to appName,
+                                "action" to "SEARCH"
+                            )
                         )
                     )
                 }
@@ -418,15 +466,36 @@ class AceCommandRouter {
 
         // E. CALL / DIAL CONTACT OR PHONE NUMBER
         if (lower.startsWith("call ") || lower.startsWith("dial ") || lower.startsWith("phone ")) {
+            val isCall = lower.startsWith("call ")
             val target = extractTarget(subCmd, listOf("call ", "dial ", "phone "))
             if (target.isNotBlank()) {
                 if (looksLikePhoneNumber(target)) {
+                    val capId = if (isCall) "phone_call" else "phone_dialer"
+                    val labelStr = if (isCall) "Call $target" else "Dial $target"
                     return listOf(
                         TaskStep(
                             id = "step_$startStepIdx",
-                            label = "Dial $target",
-                            capabilityId = "phone_dialer",
+                            label = labelStr,
+                            capabilityId = capId,
                             inputParams = mapOf("phoneNumber" to target, "contactName" to target)
+                        )
+                    )
+                } else if (isCall) {
+                    val lookupId = "step_${startStepIdx}_lookup"
+                    val callId = "step_${startStepIdx}_call"
+                    return listOf(
+                        TaskStep(
+                            id = lookupId,
+                            label = "Lookup contact $target",
+                            capabilityId = "contact_lookup",
+                            inputParams = mapOf("query" to target, "contact" to target, "name" to target)
+                        ),
+                        TaskStep(
+                            id = callId,
+                            label = "Call $target",
+                            capabilityId = "phone_call",
+                            dependsOnStepIds = listOf(lookupId),
+                            inputParams = mapOf("contactName" to target)
                         )
                     )
                 } else {
@@ -441,7 +510,7 @@ class AceCommandRouter {
                         ),
                         TaskStep(
                             id = dialId,
-                            label = "Call $target",
+                            label = "Open dialer for $target",
                             capabilityId = "phone_dialer",
                             dependsOnStepIds = listOf(lookupId),
                             inputParams = mapOf("contactName" to target)
@@ -475,6 +544,141 @@ class AceCommandRouter {
                     inputParams = mapOf("state" to actionText, "action" to actionText)
                 )
             )
+        }
+
+        // H. SYSTEM MOBILE DATA
+        if (lower.contains("mobile data") || lower.contains("cellular data") || lower.contains("data connection")) {
+            val isOff = lower.contains("off") || lower.contains("disable") || lower.contains("turn off") || lower.contains("switch off")
+            val stateStr = if (isOff) "off" else "on"
+            return listOf(
+                TaskStep(
+                    id = "step_$startStepIdx",
+                    label = "Turn $stateStr mobile data",
+                    capabilityId = "system_mobile_data",
+                    inputParams = mapOf("state" to stateStr, "action" to stateStr)
+                )
+            )
+        }
+
+        // I. SYSTEM WI-FI
+        if (lower.contains("wifi") || lower.contains("wi-fi")) {
+            val isQuery = lower.contains("is ") || lower.contains("status") || lower.contains("check") || lower.contains("state")
+            val isOff = lower.contains("off") || lower.contains("disable") || lower.contains("turn off") || lower.contains("switch off")
+            val stateStr = if (isQuery) "query" else if (isOff) "off" else "on"
+            val labelStr = if (isQuery) "Check Wi-Fi status" else "Turn $stateStr Wi-Fi"
+            return listOf(
+                TaskStep(
+                    id = "step_$startStepIdx",
+                    label = labelStr,
+                    capabilityId = "system_wifi",
+                    inputParams = mapOf("state" to stateStr, "action" to stateStr)
+                )
+            )
+        }
+
+        // J. SYSTEM BLUETOOTH
+        if (lower.contains("bluetooth")) {
+            val isOff = lower.contains("off") || lower.contains("disable") || lower.contains("turn off") || lower.contains("switch off")
+            val stateStr = if (isOff) "off" else "on"
+            return listOf(
+                TaskStep(
+                    id = "step_$startStepIdx",
+                    label = "Turn $stateStr Bluetooth",
+                    capabilityId = "system_bluetooth",
+                    inputParams = mapOf("state" to stateStr, "action" to stateStr)
+                )
+            )
+        }
+
+        // K. SYSTEM VOLUME
+        if (lower.contains("volume")) {
+            val isUp = lower.contains("up") || lower.contains("increase") || lower.contains("raise")
+            val isDown = lower.contains("down") || lower.contains("lower") || lower.contains("decrease")
+            val dirStr = if (isUp) "up" else if (isDown) "down" else "mute"
+            return listOf(
+                TaskStep(
+                    id = "step_$startStepIdx",
+                    label = "Adjust volume ($dirStr)",
+                    capabilityId = "system_volume",
+                    inputParams = mapOf("direction" to dirStr)
+                )
+            )
+        }
+
+        // L. SYSTEM BRIGHTNESS
+        if (lower.contains("brightness") || lower.contains("screen brighter") || lower.contains("dim screen")) {
+            val isUp = lower.contains("up") || lower.contains("increase") || lower.contains("brighter")
+            val dirStr = if (isUp) "up" else "down"
+            return listOf(
+                TaskStep(
+                    id = "step_$startStepIdx",
+                    label = "Adjust brightness ($dirStr)",
+                    capabilityId = "system_brightness",
+                    inputParams = mapOf("direction" to dirStr)
+                )
+            )
+        }
+
+        // M. SYSTEM AIRPLANE MODE
+        if (lower.contains("airplane mode") || lower.contains("flight mode")) {
+            val isOff = lower.contains("off") || lower.contains("disable")
+            val stateStr = if (isOff) "off" else "on"
+            return listOf(
+                TaskStep(
+                    id = "step_$startStepIdx",
+                    label = "Turn $stateStr airplane mode",
+                    capabilityId = "system_airplane_mode",
+                    inputParams = mapOf("state" to stateStr, "action" to stateStr)
+                )
+            )
+        }
+
+        // N. ALARM & TIMER INTENT
+        if (lower.startsWith("set an alarm") || lower.startsWith("set alarm") || lower.startsWith("set timer") || lower.contains("alarm for") || lower.contains("alarm at") || lower.startsWith("alarm ")) {
+            val isTimer = lower.contains("timer")
+            val paramsMap = mutableMapOf<String, String>()
+            if (isTimer) {
+                val numMatch = Regex("""\b(\d+)\b""").find(lower)
+                val mins = numMatch?.groupValues?.get(1) ?: "10"
+                paramsMap["minutes"] = mins
+                paramsMap["message"] = "ACE Timer"
+                return listOf(
+                    TaskStep(
+                        id = "step_$startStepIdx",
+                        label = "Set timer for $mins minutes",
+                        capabilityId = "set_alarm",
+                        inputParams = paramsMap
+                    )
+                )
+            } else {
+                var hour = "7"
+                var minute = "0"
+                val timeMatch = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE).find(lower)
+                if (timeMatch != null) {
+                    val h = timeMatch.groupValues[1].toIntOrNull() ?: 7
+                    val m = timeMatch.groupValues[2].toIntOrNull() ?: 0
+                    val ampm = timeMatch.groupValues[3].lowercase()
+                    val finalH = if (ampm == "pm" && h < 12) h + 12 else if (ampm == "am" && h == 12) 0 else h
+                    hour = finalH.toString()
+                    minute = m.toString()
+                } else {
+                    val numMatch = Regex("""\b(\d{1,2})\b""").find(lower)
+                    if (numMatch != null) {
+                        hour = numMatch.groupValues[1]
+                    }
+                }
+                paramsMap["hour"] = hour
+                paramsMap["minute"] = minute
+                paramsMap["message"] = "ACE Alarm"
+                return listOf(
+                    TaskStep(
+                        id = "step_$startStepIdx",
+                        label = "Set alarm for ${hour.padStart(2, '0')}:${minute.padStart(2, '0')}",
+                        capabilityId = "set_alarm",
+                        inputParams = paramsMap
+                    )
+                )
+            }
         }
 
         return emptyList()
@@ -596,6 +800,26 @@ class AceCommandRouter {
     private fun looksLikePhoneNumber(text: String): Boolean {
         val clean = text.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
         return clean.matches(Regex("""^\+?\d{3,15}$"""))
+    }
+
+    private data class QualifiedSearch(
+        val cleanQuery: String,
+        val targetApp: String,
+        val canonicalAppName: String
+    )
+
+    private fun extractAppQualifier(rawQuery: String): QualifiedSearch? {
+        val trimmed = rawQuery.trim()
+        val match = Regex("""\s+(on|in)\s+([a-zA-Z0-9\s\.\-]+)$""", RegexOption.IGNORE_CASE).find(trimmed)
+        if (match != null) {
+            val appRaw = match.groupValues[2].trim()
+            val cleanQuery = trimmed.substring(0, match.range.first).trim()
+            if (cleanQuery.isNotBlank() && appRaw.isNotBlank() && appRaw.lowercase() != "google" && appRaw.lowercase() != "the web" && appRaw.lowercase() != "web" && appRaw.lowercase() != "internet") {
+                val canonicalApp = appRaw.split(" ").joinToString(" ") { word -> word.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() } }
+                return QualifiedSearch(cleanQuery = cleanQuery, targetApp = appRaw.lowercase(), canonicalAppName = canonicalApp)
+            }
+        }
+        return null
     }
 }
 
