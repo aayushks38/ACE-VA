@@ -64,6 +64,8 @@ class GoogleAuthClient {
                     "Failed to parse Google credential: ${e.message}"
                 )
             }
+        } catch (e: androidx.credentials.exceptions.GetCredentialCancellationException) {
+            GoogleAuthResult.Cancelled
         } catch (e: GetCredentialException) {
             GoogleAuthResult.Error(e.message ?: "Google Sign-In failed")
         } catch (e: CancellationException) {
