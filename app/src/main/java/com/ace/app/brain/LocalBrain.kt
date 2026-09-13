@@ -2,7 +2,6 @@ package com.ace.app.brain
 
 import android.content.Context
 import android.net.Uri
-import com.ace.app.agent.AgentPlan
 import com.ace.app.brain.model.ModelSpec
 
 enum class BrainState {
@@ -30,7 +29,7 @@ data class ModelHandle(
 )
 
 sealed class BrainResult {
-    data class Success(val message: String = "Model initialization successful", val rawReasoning: String = "", val plan: AgentPlan? = null) : BrainResult()
+    data class Success(val message: String = "Model initialization successful", val rawReasoning: String = "") : BrainResult()
     data class Error(val message: String) : BrainResult()
     object Cancelled : BrainResult()
 }
@@ -38,9 +37,7 @@ sealed class BrainResult {
 
 interface LocalBrain : ReasoningBrain {
     suspend fun initialize(context: Context, handle: ModelHandle): BrainResult
-    suspend fun generate(goal: String, contextInput: String = "", generationId: Long = 0): BrainResult
     suspend fun cancel()
     fun getBrainState(): BrainState
     fun close()
 }
-

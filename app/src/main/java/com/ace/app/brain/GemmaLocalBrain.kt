@@ -210,10 +210,6 @@ class GemmaLocalBrain : LocalBrain {
         }
     }
 
-    @Deprecated("Legacy plan generator API — autonomous voice execution uses reasonNextDecision()", ReplaceWith("reasonNextDecision"))
-    override suspend fun generate(goal: String, contextInput: String, generationId: Long): BrainResult = withContext(Dispatchers.IO) {
-        BrainResult.Error("Legacy generate() API deprecated. Autonomous voice execution path operates strictly via reasonNextDecision().")
-    }
 
     override suspend fun cancel() {
         val instanceId = System.identityHashCode(this@GemmaLocalBrain)

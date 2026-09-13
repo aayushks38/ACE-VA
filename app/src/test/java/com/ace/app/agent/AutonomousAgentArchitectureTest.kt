@@ -266,7 +266,6 @@ class AutonomousAgentArchitectureTest {
         val mockLocalBrain = object : com.ace.app.brain.LocalBrain {
             override val backendType = ReasoningBackend.LOCAL_GEMMA
             override suspend fun initialize(context: android.content.Context, handle: com.ace.app.brain.ModelHandle): com.ace.app.brain.BrainResult = com.ace.app.brain.BrainResult.Cancelled
-            override suspend fun generate(goal: String, contextInput: String, generationId: Long): com.ace.app.brain.BrainResult = com.ace.app.brain.BrainResult.Cancelled
             override suspend fun cancel() {}
             override fun getBrainState(): com.ace.app.brain.BrainState = com.ace.app.brain.BrainState.READY
             override fun close() {}
