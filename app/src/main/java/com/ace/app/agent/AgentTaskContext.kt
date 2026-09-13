@@ -1,6 +1,17 @@
 package com.ace.app.agent
 
 /**
+ * Generic semantic postcondition contract describing what must be true when a goal is achieved.
+ * Decoupled from specific applications, websites, or workflows.
+ */
+data class ExpectedPostcondition(
+    val summary: String = "",
+    val desiredState: String = "",
+    val desiredInformation: String = "",
+    val desiredEnvironmentCondition: String = ""
+)
+
+/**
  * Transient structured task context maintained during autonomous computer use.
  * Authoritative state store for user goal, expected postconditions, action history,
  * environment observations, evidence, and verification tracking.
@@ -8,7 +19,7 @@ package com.ace.app.agent
  */
 data class AgentTaskContext(
     var userGoal: String,
-    var expectedPostcondition: String? = null,
+    var expectedPostcondition: ExpectedPostcondition = ExpectedPostcondition(),
     val generationId: Long = 0L,
     val discoveredEnvironment: String = "UNKNOWN",
     val actionHistory: MutableList<String> = mutableListOf(),

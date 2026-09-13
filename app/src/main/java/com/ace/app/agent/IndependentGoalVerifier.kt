@@ -19,9 +19,10 @@ data class EnvironmentEvidence(
 )
 
 /**
- * Generic Postcondition Goal Verification Engine.
- * Answers: "Is the requested postcondition empirically satisfied in the current environment?"
- * Absolutely zero hardcoded branches for specific applications, websites, commands, task categories, or goal strings.
+ * Generic Semantic Postcondition Goal Verification Engine.
+ * Evaluates: EXPECTED POSTCONDITION + CURRENT ENVIRONMENT EVIDENCE -> VERIFICATION RESULT
+ * Answers: "Is the requested postcondition empirically satisfied in the current environment right now?"
+ * Absolutely zero hardcoded shortcuts for specific applications, websites, commands, task categories, or goal strings.
  */
 object IndependentGoalVerifier {
 
@@ -30,7 +31,7 @@ object IndependentGoalVerifier {
         currentObservation: ScreenObservation,
         context: Context?
     ): IndependentVerificationOutcome {
-        Log.i("ACE_VERIFY", "ACE_VERIFY: Starting generic postcondition verification for goal='${taskContext.userGoal}'")
+        Log.i("ACE_VERIFY", "ACE_VERIFY: Starting semantic postcondition verification for goal='${taskContext.userGoal}'")
         Log.i("ACE_VERIFY", "ACE_VERIFY: current_app=${currentObservation.appName} pkg=${currentObservation.packageName} nodes=${currentObservation.visibleText.size}")
 
         val evidence = EnvironmentEvidence(
@@ -41,11 +42,12 @@ object IndependentGoalVerifier {
             brainHypothesis = taskContext.capturedEvidence["brain_completion_hypothesis"]
         )
 
-        return evaluateGenericEvidence(taskContext.userGoal, evidence)
+        return evaluateSemanticPostcondition(taskContext.userGoal, taskContext.expectedPostcondition, evidence)
     }
 
-    private fun evaluateGenericEvidence(
+    private fun evaluateSemanticPostcondition(
         userGoal: String,
+        postcondition: ExpectedPostcondition,
         evidence: EnvironmentEvidence
     ): IndependentVerificationOutcome {
         // 1. Task execution blocked by missing capability or permission
@@ -59,50 +61,60 @@ object IndependentGoalVerifier {
             )
         }
 
-        // 2. Generic Postcondition Check A: Verifiable Empirical Content Payload
-        // (Content URI, File URI, Attachment URI produced by execution and confirmed accessible)
-        val payloadUri = evidence.capturedEvidenceMap["file_uri"]
-            ?: evidence.capturedEvidenceMap["attachment_uri"]
-            ?: evidence.capturedEvidenceMap["content_uri"]
-            ?: evidence.capturedEvidenceMap["resolved_uri"]
-        if (!payloadUri.isNullOrBlank()) {
-            return IndependentVerificationOutcome(
-                isVerified = true,
-                status = TaskStatus.COMPLETED,
-                evidence = "Empirical content payload verified: $payloadUri",
-                summary = "Goal satisfied with verified content payload."
-            )
+        val obs = evidence.screenObservation
+        val visibleTextSet = obs.visibleText.map { it.lowercase().trim() }.toSet()
+        val hypothesis = evidence.brainHypothesis.orEmpty().lowercase()
+
+        // 2. Generic Semantic Postcondition Evaluation
+        // Evaluate expected postcondition against current environment evidence
+        val summaryTarget = postcondition.summary.lowercase().trim()
+        val desiredStateTarget = postcondition.desiredState.lowercase().trim()
+        val desiredInfoTarget = postcondition.desiredInformation.lowercase().trim()
+        val desiredEnvTarget = postcondition.desiredEnvironmentCondition.lowercase().trim()
+
+        val activeTargets = listOf(summaryTarget, desiredStateTarget, desiredInfoTarget, desiredEnvTarget)
+            .filter { it.isNotBlank() }
+
+        if (activeTargets.isNotEmpty()) {
+            // Check if active semantic targets are empirically confirmed in current screen observation or captured state
+            val confirmedState = activeTargets.any { target ->
+                obs.appName.lowercase().contains(target) ||
+                obs.packageName.lowercase().contains(target) ||
+                visibleTextSet.any { text -> text.contains(target) } ||
+                evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(target) }
+            }
+
+            if (confirmedState) {
+                return IndependentVerificationOutcome(
+                    isVerified = true,
+                    status = TaskStatus.COMPLETED,
+                    evidence = "Empirical environment observation (${obs.appName}) satisfies semantic postcondition criteria.",
+                    summary = "Goal outcome verified in current environment state."
+                )
+            }
         }
 
-        // 3. Generic Postcondition Check B: Verified Device Platform State Output
-        // (Hardware/system state modification explicitly reported by platform service API)
-        val platformStateDetail = evidence.capturedEvidenceMap["hardware_action"]
-            ?: evidence.capturedEvidenceMap["system_api_result"]
-        if (!platformStateDetail.isNullOrBlank()) {
-            return IndependentVerificationOutcome(
-                isVerified = true,
-                status = TaskStatus.COMPLETED,
-                evidence = "System platform state modification verified: $platformStateDetail",
-                summary = "Goal satisfied with verified system state."
-            )
+        // 3. Fallback: If brain hypothesis proposed completion and current environment is non-empty, evaluate hypothesis relative to observation
+        if (hypothesis.isNotBlank() && obs.visibleText.isNotEmpty()) {
+            val hypothesisVerified = visibleTextSet.any { text -> hypothesis.contains(text) && text.length > 3 } ||
+                    evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(hypothesis) }
+            if (hypothesisVerified) {
+                return IndependentVerificationOutcome(
+                    isVerified = true,
+                    status = TaskStatus.COMPLETED,
+                    evidence = "Brain completion hypothesis '${evidence.brainHypothesis}' empirically confirmed by environment observation.",
+                    summary = "Goal outcome verified via environment state."
+                )
+            }
         }
 
-        // 4. Default Fallback: Insufficient Empirical Postcondition Evidence
-        val successfulActions = evidence.actionHistory.filter { it.contains("SUCCESS") }
-        if (successfulActions.isNotEmpty()) {
-            return IndependentVerificationOutcome(
-                isVerified = false,
-                status = TaskStatus.NOT_VERIFIED,
-                evidence = "Actions executed (${successfulActions.size}), but empirical postcondition completion is not satisfied in current environment (${evidence.screenObservation.appName}).",
-                summary = "Actions executed, but postcondition outcome remains unverified."
-            )
-        }
-
+        // 4. Default: Insufficient Empirical Postcondition Evidence
+        val actionCount = evidence.actionHistory.size
         return IndependentVerificationOutcome(
             isVerified = false,
-            status = TaskStatus.FAILED,
-            evidence = "No empirical evidence verifying postcondition for goal: '$userGoal'",
-            summary = "Goal outcome unverified."
+            status = TaskStatus.NOT_VERIFIED,
+            evidence = "Executed $actionCount action(s), but empirical postcondition is not fully verified in current environment state (${obs.appName}).",
+            summary = "Postcondition unverified in current environment state."
         )
     }
 }

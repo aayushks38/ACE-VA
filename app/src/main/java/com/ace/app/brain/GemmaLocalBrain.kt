@@ -346,10 +346,12 @@ class GemmaLocalBrain : LocalBrain {
         }
 
         val compactUi = ScreenObservationEngine.formatCompactUiRepresentation(cleanGoal, observation)
+        val postconditionSummary = context.expectedPostcondition.summary.ifBlank { cleanGoal }
         val prompt = buildString {
             append("<start_of_turn>user\n")
             append("You are ACE, an autonomous computer-use agent for Android.\n")
             append("Goal: $cleanGoal\n")
+            append("Expected Outcome: $postconditionSummary\n")
             append("Current Observation:\n$compactUi\n")
             append("Choose SINGLE next decision. Return compact JSON:\n")
             append("If underspecified: {\"status\":\"CLARIFY\",\"question\":\"<question>\"}\n")

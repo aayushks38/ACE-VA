@@ -18,14 +18,19 @@ class AgentExecutor(private val context: Context?) {
         onConversationalResponse: (String) -> Unit,
         generationId: Long
     ): AgentTask {
-        val taskContext = AgentTaskContext(userGoal = userGoal, generationId = generationId)
-        val initialSteps = mutableListOf<TaskStep>()
+        val taskContext = AgentTaskContext(
+            userGoal = userGoal,
+            expectedPostcondition = ExpectedPostcondition(summary = userGoal, desiredState = userGoal),
+            generationId = generationId
+        )
+        val actionRecords = mutableListOf<AgentActionRecord>()
         var currentTask = AgentTask(
             goal = userGoal,
             category = TaskCategory.GENERAL,
             status = TaskStatus.RUNNING,
             summary = "Autonomous agent evaluating goal: $userGoal",
-            steps = initialSteps
+            steps = emptyList(),
+            actionRecords = actionRecords
         )
         onStepUpdated(currentTask)
 
@@ -114,21 +119,15 @@ class AgentExecutor(private val context: Context?) {
                 }
 
                 is com.ace.app.brain.AgentDecision.Action -> {
-                    val stepId = "step_$iteration"
-                    val step = TaskStep(
-                        id = stepId,
-                        label = "Step $iteration: ${decision.primitive} ${decision.target}",
-                        capabilityId = decision.primitive,
-                        inputParams = mapOf(
-                            "target" to decision.target,
-                            "query" to decision.target,
-                            "text" to decision.inputText.orEmpty(),
-                            "url" to decision.target,
-                            "app" to decision.target
-                        )
+                    val actionId = "action_$iteration"
+                    val actionRecord = AgentActionRecord(
+                        id = actionId,
+                        primitive = decision.primitive,
+                        target = decision.target,
+                        status = "RUNNING"
                     )
-                    initialSteps.add(step.copy(isRunning = true))
-                    currentTask = currentTask.copy(steps = initialSteps.toList())
+                    actionRecords.add(actionRecord)
+                    currentTask = currentTask.copy(actionRecords = actionRecords.toList())
                     onStepUpdated(currentTask)
 
                     // DIRECT UNIVERSAL ACTION EXECUTION (No TaskStep / CapabilityRegistry requirement)
@@ -138,12 +137,9 @@ class AgentExecutor(private val context: Context?) {
                         return currentTask.copy(status = TaskStatus.CANCELLED, summary = "Task cancelled by user.")
                     }
 
-                    initialSteps[initialSteps.lastIndex] = step.copy(
-                        isRunning = false,
-                        isComplete = universalResult.status == ActionResultStatus.SUCCESS,
-                        isVerified = universalResult.status == ActionResultStatus.SUCCESS,
+                    actionRecords[actionRecords.lastIndex] = actionRecord.copy(
                         output = universalResult.message,
-                        outputData = universalResult.outputData
+                        status = universalResult.status.name
                     )
                     taskContext.actionHistory.add("Iteration $iteration: ${decision.primitive}(${decision.target}) -> ${universalResult.status}")
                     if (universalResult.status == ActionResultStatus.SUCCESS) {
@@ -154,7 +150,7 @@ class AgentExecutor(private val context: Context?) {
                     if (!universalResult.evidence.isNullOrBlank()) {
                         taskContext.capturedEvidence["action_${iteration}_evidence"] = universalResult.evidence
                     }
-                    currentTask = currentTask.copy(steps = initialSteps.toList())
+                    currentTask = currentTask.copy(actionRecords = actionRecords.toList())
                     onStepUpdated(currentTask)
 
                     // Brief delay for UI pre-render / settle, then capture FRESH observation

@@ -91,13 +91,23 @@ data class GoalRequirement(
     val verificationDetails: String = "Pending verification"
 )
 
+data class AgentActionRecord(
+    val id: String = UUID.randomUUID().toString(),
+    val primitive: String,
+    val target: String = "",
+    val output: String? = null,
+    val status: String = "RUNNING",
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 data class AgentTask(
     val id: String = UUID.randomUUID().toString(),
     val goal: String,
     val category: TaskCategory = TaskCategory.GENERAL,
     val status: TaskStatus = TaskStatus.PLANNING,
     val summary: String,
-    val steps: List<TaskStep>,
+    val steps: List<TaskStep> = emptyList(),
+    val actionRecords: List<AgentActionRecord> = emptyList(),
     val requirements: List<GoalRequirement> = emptyList(),
     val requiresApproval: Boolean = false,
     val approvalDetails: ApprovalDetails? = null,

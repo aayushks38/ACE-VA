@@ -68,8 +68,9 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
                     put("content", "You are ACE, an autonomous computer-use agent for Android. Return JSON with status: DONE|CONTINUE|CLARIFY, action: ui_click|ui_type|ui_scroll|web_open_url|ui_open_app, target, text, question, reason.")
                 })
                 put(JSONObject().apply {
+                    val postconditionSummary = context.expectedPostcondition.summary.ifBlank { goal }
                     put("role", "user")
-                    put("content", "Goal: $goal\nObservation:\n$compactUi")
+                    put("content", "Goal: $goal\nExpected Outcome: $postconditionSummary\nObservation:\n$compactUi")
                 })
             })
             put("temperature", 0.1)
