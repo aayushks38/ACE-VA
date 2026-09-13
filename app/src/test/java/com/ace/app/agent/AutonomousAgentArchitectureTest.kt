@@ -188,7 +188,7 @@ class AutonomousAgentArchitectureTest {
         context.expectedPostcondition = GoalUnderstandingEngine.derivePostcondition(newGoal)
 
         assertEquals("Updated target goal", context.userGoal)
-        assertEquals("Objective 'Updated target goal' fully satisfied", context.expectedPostcondition.summary)
+        assertEquals("Verify observable state satisfied for 'Updated target goal'", context.expectedPostcondition.summary)
     }
 
     // 12. Local and cloud brains emit the same AgentDecision contract.

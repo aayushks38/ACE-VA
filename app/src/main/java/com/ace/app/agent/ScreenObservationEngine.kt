@@ -22,6 +22,7 @@ data class ScreenObservation(
     val editableElements: List<ScreenElement> = emptyList(),
     val scrollableElements: List<ScreenElement> = emptyList(),
     val screenState: String = "UNKNOWN",
+    val isPerceptionAvailable: Boolean = true,
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -37,9 +38,20 @@ object ScreenObservationEngine {
         val editables = mutableListOf<ScreenElement>()
         val scrollables = mutableListOf<ScreenElement>()
 
-        if (rootNode != null) {
-            traverseNodeTree(rootNode, visibleTexts, clickables, editables, scrollables)
+        if (rootNode == null) {
+            return ScreenObservation(
+                packageName = currentPackage,
+                appName = appName,
+                visibleText = emptyList(),
+                clickableElements = emptyList(),
+                editableElements = emptyList(),
+                scrollableElements = emptyList(),
+                screenState = "PERCEPTION_UNAVAILABLE",
+                isPerceptionAvailable = false
+            )
         }
+
+        traverseNodeTree(rootNode, visibleTexts, clickables, editables, scrollables)
 
         val hasSearchInput = editables.isNotEmpty() || visibleTexts.any { it.lowercase().contains("search") || it.lowercase().contains("type") }
         val screenState = when {
@@ -55,7 +67,8 @@ object ScreenObservationEngine {
             clickableElements = clickables,
             editableElements = editables,
             scrollableElements = scrollables,
-            screenState = screenState
+            screenState = screenState,
+            isPerceptionAvailable = true
         )
     }
 
@@ -139,6 +152,7 @@ object ScreenObservationEngine {
         return buildString {
             append("CURRENT_APP: ${observation.appName.ifBlank { observation.packageName }}\n")
             append("USER_GOAL: $userGoal\n")
+            append("PERCEPTION_AVAILABLE: ${observation.isPerceptionAvailable}\n")
             append("EDITABLE: $editables\n")
             append("CLICKABLE: $clickables\n")
             append("VISIBLE_TEXT: $texts\n")
@@ -148,40 +162,11 @@ object ScreenObservationEngine {
 
     /** Evaluates whether local perception can execute immediately (HIGH confidence >= 0.8) or requires Gemma UI reasoning. */
     fun evaluateLocalConfidence(userGoal: String, observation: ScreenObservation): Float {
+        if (!observation.isPerceptionAvailable) return 0.0f
         val searchNode = findSearchInputNode(observation)
         if (searchNode != null && searchNode.text.lowercase().contains("search")) return 1.0f
         if (observation.editableElements.isNotEmpty()) return 0.85f
         if (observation.clickableElements.any { it.text.lowercase().contains("search") || it.contentDescription.lowercase().contains("search") }) return 0.8f
         return 0.3f
-    }
-
-    /** Heuristic perception fallback for determineNextAction when Gemma model is initializing. */
-    fun determineNextActionHeuristic(userGoal: String, observation: ScreenObservation): com.ace.app.brain.AgentDecision {
-        val lowerGoal = userGoal.lowercase()
-        val targetMatch = observation.clickableElements.firstOrNull { elem ->
-            val t = (elem.text + " " + elem.contentDescription).lowercase()
-            t.isNotBlank() && lowerGoal.contains(t)
-        }
-        if (targetMatch != null) {
-            val label = targetMatch.text.ifBlank { targetMatch.contentDescription }
-            return com.ace.app.brain.AgentDecision.Action(
-                primitive = "ui_click",
-                target = label
-            )
-        }
-
-        val searchInput = findSearchInputNode(observation)
-        if (searchInput != null) {
-            val queryText = userGoal.replace(Regex("(?i)^(find|search|look for|get|show)\\s+"), "").trim()
-            return com.ace.app.brain.AgentDecision.Action(
-                primitive = "ui_type",
-                target = searchInput.text.ifBlank { searchInput.contentDescription.ifBlank { "Search" } },
-                inputText = queryText
-            )
-        }
-
-        return com.ace.app.brain.AgentDecision.Complete(
-            evidence = "Observation analyzed; proceeding to postcondition verification"
-        )
     }
 }

@@ -64,6 +64,15 @@ object IndependentGoalVerifier {
         }
 
         val obs = evidence.screenObservation
+        if (!obs.isPerceptionAvailable || obs.screenState == "PERCEPTION_UNAVAILABLE") {
+            return IndependentVerificationOutcome(
+                isVerified = false,
+                status = TaskStatus.NOT_VERIFIED,
+                evidence = "Perception is unavailable or unobserved; cannot verify postcondition.",
+                summary = "Environment observation unavailable for postcondition verification."
+            )
+        }
+
         val visibleTextSet = obs.visibleText.map { it.lowercase().trim() }.toSet()
 
         // 2. Strict Semantic Postcondition Evaluation: Multi-condition & Entity Evidence Check
@@ -88,26 +97,24 @@ object IndependentGoalVerifier {
                 )
             }
         } else if (desiredInformation.isNotBlank()) {
-            // Informational postcondition verification: check if extracted information is present in evidence
-            val infoVerified = evidence.capturedEvidenceMap.values.any { it.isNotBlank() } ||
-                    visibleTextSet.any { text -> text.length > 10 }
-            if (infoVerified) {
+            // Informational postcondition verification: check if empirical information answering query is in evidence
+            val hasAnswerEvidence = evidence.capturedEvidenceMap.values.any { it.isNotBlank() }
+            if (hasAnswerEvidence) {
                 return IndependentVerificationOutcome(
                     isVerified = true,
                     status = TaskStatus.COMPLETED,
-                    evidence = "Empirical informational verification satisfied: extracted data present in current environment state.",
+                    evidence = "Empirical informational verification satisfied: answer evidence extracted in environment state.",
                     summary = "Informational goal outcome verified."
                 )
             }
         } else if (desiredState.isNotBlank()) {
-            val stateVerified = evidence.capturedEvidenceMap.containsKey("target_package") ||
-                    evidence.capturedEvidenceMap.containsKey("target_url") ||
-                    evidence.capturedEvidenceMap.containsKey("hardware_action")
-            if (stateVerified && obs.visibleText.isNotEmpty()) {
+            // Observable state verification: check if current UI state or visible elements verify the state transition
+            val hasStateEvidence = evidence.capturedEvidenceMap.values.any { it.isNotBlank() }
+            if (hasStateEvidence && obs.visibleText.isNotEmpty()) {
                 return IndependentVerificationOutcome(
                     isVerified = true,
                     status = TaskStatus.COMPLETED,
-                    evidence = "Empirical state modification satisfied in current environment.",
+                    evidence = "Empirical state modification satisfied in current environment observation (${obs.appName}).",
                     summary = "State modification goal outcome verified."
                 )
             }

@@ -65,12 +65,14 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
             put("messages", org.json.JSONArray().apply {
                 put(JSONObject().apply {
                     put("role", "system")
-                    put("content", "You are ACE, an autonomous computer-use agent for Android. Return JSON with status: DONE|CONTINUE|CLARIFY, action: ui_click|ui_type|ui_scroll|web_open_url|ui_open_app, target, text, question, reason.")
+                    put("content", "You are ACE, an autonomous general computer-use agent for Android. Return compact JSON with status: DONE|CONTINUE|CLARIFY|REPLAN|BLOCKED, action: ui_click|ui_type|ui_scroll|web_open_url|ui_open_app, target, text, question, reason.")
                 })
                 put(JSONObject().apply {
                     val postconditionSummary = context.expectedPostcondition.summary.ifBlank { goal }
+                    val historyStr = context.actionHistory.takeLast(4).joinToString("; ")
+                    val blockersStr = context.blockers.joinToString("; ")
                     put("role", "user")
-                    put("content", "Goal: $goal\nExpected Outcome: $postconditionSummary\nObservation:\n$compactUi")
+                    put("content", "Goal: $goal\nExpected Outcome: $postconditionSummary\nPrevious Actions: $historyStr\nBlockers: $blockersStr\nPerception Available: ${observation.isPerceptionAvailable}\nObservation:\n$compactUi")
                 })
             })
             put("temperature", 0.1)
