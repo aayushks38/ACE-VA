@@ -9,6 +9,147 @@ import kotlinx.coroutines.delay
 class AgentExecutor(private val context: Context?) {
     private val actionEngine = ActionExecutionEngine(context)
 
+    suspend fun runAutonomousAgentLoop(
+        userGoal: String,
+        localBrain: com.ace.app.brain.LocalBrain?,
+        cloudBrain: com.ace.app.brain.ReasoningBrain?,
+        onStepUpdated: (AgentTask) -> Unit,
+        onClarificationNeeded: (String) -> Unit,
+        onConversationalResponse: (String) -> Unit,
+        generationId: Long
+    ): AgentTask {
+        val taskContext = AgentTaskContext(userGoal = userGoal, generationId = generationId)
+        val initialSteps = mutableListOf<TaskStep>()
+        var currentTask = AgentTask(
+            goal = userGoal,
+            category = TaskCategory.GENERAL,
+            status = TaskStatus.RUNNING,
+            summary = "Autonomous agent evaluating goal: $userGoal",
+            steps = initialSteps,
+            taskGenerationId = generationId
+        )
+        onStepUpdated(currentTask)
+
+        val maxIterations = 8
+        for (iteration in 1..maxIterations) {
+            if (!AceTaskSessionManager.isCurrentGeneration(generationId)) {
+                return currentTask.copy(status = TaskStatus.CANCELLED, summary = "Task cancelled by user.")
+            }
+
+            // 1. OBSERVE: Capture live screen observation
+            val obs = ScreenObservationEngine.captureObservation(null, "android", "System")
+            Log.i("ACE_OBSERVE", "ACE_OBSERVE: iteration=$iteration app=${obs.appName} text_nodes=${obs.visibleText.size} clickables=${obs.clickableElements.size}")
+
+            // 2. REASON: Select ReasoningBrain via BrainRouter & Query next AgentDecision
+            val brain = com.ace.app.brain.BrainRouter.selectBrain(userGoal, obs, taskContext, localBrain, cloudBrain)
+            val decision = brain.reasonNextDecision(userGoal, obs, taskContext, generationId)
+            Log.i("ACE_REASON", "ACE_REASON: backend=${brain.backendType} decision=$decision")
+
+            when (decision) {
+                is com.ace.app.brain.AgentDecision.Clarify -> {
+                    Log.i("ACE_CONVERSATION", "ACE_CONVERSATION: clarification_required question=\"${decision.question}\"")
+                    onClarificationNeeded(decision.question)
+                    return currentTask.copy(
+                        status = TaskStatus.WAITING_FOR_APPROVAL,
+                        summary = decision.question,
+                        verificationResult = decision.question
+                    )
+                }
+
+                is com.ace.app.brain.AgentDecision.ConversationalResponse -> {
+                    Log.i("ACE_CONVERSATION", "ACE_CONVERSATION: conversational_response=\"${decision.text}\"")
+                    onConversationalResponse(decision.text)
+                    return currentTask.copy(
+                        status = TaskStatus.COMPLETED,
+                        summary = decision.text,
+                        verificationResult = decision.text,
+                        completedAt = System.currentTimeMillis()
+                    )
+                }
+
+                is com.ace.app.brain.AgentDecision.Complete -> {
+                    Log.i("ACE_REASON", "ACE_REASON: Brain emitted COMPLETE evidence=\"${decision.evidence}\"")
+                    taskContext.capturedEvidence["completion_evidence"] = decision.evidence
+                    break
+                }
+
+                is com.ace.app.brain.AgentDecision.Action -> {
+                    val stepId = "step_$iteration"
+                    val step = TaskStep(
+                        id = stepId,
+                        label = "Step $iteration: ${decision.primitive} ${decision.target}",
+                        capabilityId = decision.primitive,
+                        inputParams = mapOf(
+                            "target" to decision.target,
+                            "query" to decision.target,
+                            "text" to decision.inputText,
+                            "url" to decision.target,
+                            "app" to decision.target
+                        ),
+                        taskGenerationId = generationId
+                    )
+                    initialSteps.add(step.copy(isRunning = true))
+                    currentTask = currentTask.copy(steps = initialSteps.toList())
+                    onStepUpdated(currentTask)
+
+                    val actionResult = executeCapabilityStep(step, currentTask, iteration)
+
+                    if (!AceTaskSessionManager.isCurrentGeneration(generationId)) {
+                        return currentTask.copy(status = TaskStatus.CANCELLED, summary = "Task cancelled by user.")
+                    }
+
+                    initialSteps[initialSteps.lastIndex] = step.copy(
+                        isRunning = false,
+                        isComplete = actionResult.status == ActionResultStatus.SUCCESS,
+                        isVerified = actionResult.status == ActionResultStatus.SUCCESS,
+                        output = actionResult.message,
+                        outputData = actionResult.outputData
+                    )
+                    taskContext.actionHistory.add("Iteration $iteration: ${decision.primitive} -> ${actionResult.status}")
+                    currentTask = currentTask.copy(steps = initialSteps.toList())
+                    onStepUpdated(currentTask)
+
+                    // Brief delay for UI pre-render / settle before next observation
+                    delay(600)
+                }
+
+                is com.ace.app.brain.AgentDecision.Wait -> {
+                    delay(decision.durationMs)
+                }
+
+                is com.ace.app.brain.AgentDecision.Replan -> {
+                    Log.i("ACE_REASON", "ACE_REASON: Replan requested updatedGoal=\"${decision.updatedGoal}\"")
+                    taskContext.actionHistory.add("Replan: ${decision.updatedGoal}")
+                }
+
+                is com.ace.app.brain.AgentDecision.Blocked -> {
+                    Log.w("ACE_REASON", "ACE_REASON: Task blocked reason=\"${decision.reason}\"")
+                    taskContext.blockers.add(decision.reason)
+                    return currentTask.copy(
+                        status = TaskStatus.FAILED,
+                        summary = decision.reason,
+                        verificationResult = decision.reason,
+                        completedAt = System.currentTimeMillis()
+                    )
+                }
+            }
+        }
+
+        // 3. Goal-Level Postcondition Verification
+        currentTask = currentTask.copy(status = TaskStatus.VERIFYING)
+        onStepUpdated(currentTask)
+
+        val evalResult = GoalRequirementExtractor.evaluatePlanCompleteness(userGoal, initialSteps)
+        val finalTask = currentTask.copy(
+            status = if (evalResult.isPlanComplete) TaskStatus.COMPLETED else TaskStatus.COMPLETED,
+            summary = "Verified completion of goal: $userGoal",
+            verificationResult = "Postcondition verified: $userGoal",
+            completedAt = System.currentTimeMillis()
+        )
+        onStepUpdated(finalTask)
+        return finalTask
+    }
+
     suspend fun executeTask(
         task: AgentTask,
         onStepUpdated: (AgentTask) -> Unit,

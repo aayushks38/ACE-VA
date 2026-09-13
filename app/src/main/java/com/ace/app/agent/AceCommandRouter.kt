@@ -104,7 +104,7 @@ class AceCommandRouter {
             val singleSteps = resolveSubCommand(subCommands[0], 1).ifEmpty { resolveSubCommand(normalized, 1) }
             if (singleSteps.isNotEmpty()) {
                 val firstCap = singleSteps.first().capabilityId
-                val isDirectAction = firstCap == "ui_open_app" || firstCap == "flashlight" || firstCap == "system_volume" || firstCap == "system_settings" || firstCap == "web_open_url" || firstCap == "universal_search" || firstCap == "media_playback" || firstCap == "play_media" || firstCap == "set_alarm"
+                val isDirectAction = firstCap == "flashlight" || firstCap == "system_volume" || firstCap == "instant_intelligence"
                 if (isDirectAction) {
                     val plan = AgentPlan(
                         userGoal = clean,

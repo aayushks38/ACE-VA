@@ -343,39 +343,51 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                     android.util.Log.i("ACE_BRAIN", "ACE_BRAIN: deep_generation_started")
                     android.util.Log.i("ACE_BRAIN", "ACE_BRAIN: submitting goal='$cleanGoal'")
 
-                    val brainResult = brain.generate(cleanGoal, _uiState.value.attachmentName.orEmpty(), generationId)
-                    val finishMs = System.currentTimeMillis()
-                    android.util.Log.i("ACE_PERF", "ACE_PERF: route=DEEP_BRAIN start_ms=$startMs finish_ms=$finishMs duration_ms=${finishMs - startMs}")
-
-                    if (!AceTaskSessionManager.validateOrDiscard(generationId, "GemmaLocalBrain.generate")) return@launch
-
-                    when (brainResult) {
-                        is BrainResult.Success -> {
-                            val plan = brainResult.plan
-
-                            if (plan.clarificationNeeded || plan.steps.isEmpty()) {
-                                val question = plan.clarificationQuestion
-                                    ?: "Could you clarify what you'd like me to do?"
+                    val cloudBrain = com.ace.app.brain.CloudReasoningBrain(context)
+                    val finalTask = executor.runAutonomousAgentLoop(
+                        userGoal = cleanGoal,
+                        localBrain = brain,
+                        cloudBrain = cloudBrain,
+                        onStepUpdated = { updatedTask ->
+                            if (AceTaskSessionManager.isCurrentGeneration(generationId)) {
+                                _uiState.value = _uiState.value.copy(activeTask = updatedTask)
+                            }
+                        },
+                        onClarificationNeeded = { question ->
+                            if (AceTaskSessionManager.isCurrentGeneration(generationId)) {
                                 _uiState.value = _uiState.value.copy(
                                     activeTask = null,
                                     lastHeard = cleanGoal,
-                                    announcement = question
+                                    announcement = question,
+                                    currentActionLabel = ""
                                 )
                                 voiceManager?.speak(question, generationId) { AceTaskSessionManager.getCurrentGenerationId() }
-                                return@launch
                             }
+                        },
+                        onConversationalResponse = { text ->
+                            if (AceTaskSessionManager.isCurrentGeneration(generationId)) {
+                                _uiState.value = _uiState.value.copy(
+                                    activeTask = null,
+                                    lastHeard = cleanGoal,
+                                    announcement = text,
+                                    currentActionLabel = ""
+                                )
+                                voiceManager?.speak(text, generationId) { AceTaskSessionManager.getCurrentGenerationId() }
+                            }
+                        },
+                        generationId = generationId
+                    )
+                    val finishMs = System.currentTimeMillis()
+                    android.util.Log.i("ACE_PERF", "ACE_PERF: route=DEEP_BRAIN start_ms=$startMs finish_ms=$finishMs duration_ms=${finishMs - startMs}")
 
-                            executePlan(cleanGoal, plan, generationId, brainResult.rawReasoning)
-                        }
-
-                        is BrainResult.Error -> {
-                            val errMsg = brainResult.message
-                            _uiState.value = _uiState.value.copy(announcement = errMsg)
-                            voiceManager?.speak(errMsg, generationId) { AceTaskSessionManager.getCurrentGenerationId() }
-                        }
-
-                        is BrainResult.Cancelled -> {
-                            android.util.Log.i("ACE_TASK", "ACE_TASK: previous task marked CANCELLED")
+                    if (AceTaskSessionManager.validateOrDiscard(generationId, "TaskViewModel.DeepBrain")) {
+                        if (finalTask.status == TaskStatus.COMPLETED && finalTask.summary.isNotBlank()) {
+                            val response = com.ace.app.voice.AssistantResponseComposer.compose(cleanGoal, finalTask)
+                            _uiState.value = _uiState.value.copy(
+                                announcement = response.displayText,
+                                currentActionLabel = ""
+                            )
+                            AceProgressSpeaker.speakTaskCompleted(response.spokenText, generationId)
                         }
                     }
                 }
