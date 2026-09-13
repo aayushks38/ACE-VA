@@ -337,15 +337,15 @@ class GemmaLocalBrain : LocalBrain {
     ): GoalInterpretation = withContext(Dispatchers.IO) {
         val cleanGoal = goal.trim()
         if (llamaBridge == null || !isReady()) {
-            return@withContext GoalUnderstandingEngine.createInitialInterpretation(cleanGoal)
+            return@withContext GoalInterpretation(rawGoal = cleanGoal, objectiveType = "UNINTERPRETED_BACKEND_UNAVAILABLE")
         }
 
         val prompt = buildString {
             append("<start_of_turn>user\n")
-            append("You are ACE, an autonomous computer-use agent. Analyze goal semantically:\n")
+            append("You are ACE, an autonomous computer-use cognitive agent. Analyze user goal semantically:\n")
             append("Goal: $cleanGoal\n")
             append("Return compact JSON object:\n")
-            append("{\"objectiveType\":\"INFORMATION_RETRIEVAL|STATE_MODIFICATION|GENERAL\",\"requestedOutcome\":\"<outcome>\",\"targetEntities\":[\"<entity>\"],\"desiredState\":\"<state>\",\"desiredInformation\":\"<info>\",\"isAmbiguous\":false,\"clarificationQuestion\":null}\n")
+            append("{\"objectiveType\":\"INFORMATION_RETRIEVAL|STATE_MODIFICATION|GENERAL\",\"requestedOutcome\":\"<outcome>\",\"targetEntities\":[\"<entity>\"],\"desiredState\":\"<state>\",\"desiredInformation\":\"<info>\",\"clarificationRequired\":false,\"clarificationQuestion\":null}\n")
             append("<end_of_turn>\n<start_of_turn>model\n{")
         }
 
@@ -361,7 +361,7 @@ class GemmaLocalBrain : LocalBrain {
                 if (sStart != -1 && sEnd > sStart) {
                     val json = JSONObject(candidate.substring(sStart, sEnd + 1))
                     val typeStr = json.optString("objectiveType", "GENERAL")
-                    val isAmbig = json.optBoolean("isAmbiguous", false)
+                    val isAmbig = json.optBoolean("clarificationRequired", json.optBoolean("isAmbiguous", false))
                     val q = if (isAmbig) json.optString("clarificationQuestion", "Could you clarify your goal?") else null
                     val entities = mutableListOf<String>()
                     val arr = json.optJSONArray("targetEntities")
@@ -372,17 +372,17 @@ class GemmaLocalBrain : LocalBrain {
                         rawGoal = cleanGoal,
                         objectiveType = typeStr,
                         requestedOutcome = json.optString("requestedOutcome", cleanGoal),
-                        targetEntities = entities.ifEmpty { listOf(cleanGoal) },
-                        desiredFinalState = json.optString("desiredState", "Observable state for $cleanGoal"),
-                        desiredInformation = json.optString("desiredInformation", "Information for $cleanGoal"),
-                        isAmbiguous = isAmbig,
+                        targetEntities = entities,
+                        desiredFinalState = json.optString("desiredState", ""),
+                        desiredInformation = json.optString("desiredInformation", ""),
+                        clarificationRequired = isAmbig,
                         clarificationQuestion = q
                     )
                 }
             } catch (_: Exception) {}
         }
 
-        return@withContext GoalUnderstandingEngine.createInitialInterpretation(cleanGoal)
+        return@withContext GoalInterpretation(rawGoal = cleanGoal, objectiveType = "UNINTERPRETED_BACKEND_UNAVAILABLE")
     }
 
     override suspend fun reasonNextDecision(

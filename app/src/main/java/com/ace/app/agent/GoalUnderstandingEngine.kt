@@ -2,16 +2,23 @@ package com.ace.app.agent
 
 import android.util.Log
 
+/**
+ * Structured Goal Interpretation produced by the Reasoning Model.
+ * Kotlin does NOT decide intent, ambiguity, or postconditions; the model does.
+ */
 data class GoalInterpretation(
     val rawGoal: String,
     val objectiveType: String = "GENERAL",
     val requestedOutcome: String = "",
     val targetEntities: List<String> = emptyList(),
     val constraints: List<String> = emptyList(),
+    val temporalRequirements: List<String> = emptyList(),
     val desiredFinalState: String = "",
     val desiredInformation: String = "",
     val successConditions: List<String> = emptyList(),
+    val unresolvedAmbiguities: List<String> = emptyList(),
     val isAmbiguous: Boolean = false,
+    val clarificationRequired: Boolean = false,
     val clarificationQuestion: String? = null
 )
 
@@ -40,44 +47,39 @@ data class StructuredGoalObjective(
 )
 
 /**
- * Pure Model-Facing Goal Understanding & Semantic Postcondition Engine.
+ * Pure Passive Data Contract Adapter.
+ * Converts model-produced GoalInterpretation into ExpectedPostcondition and StructuredGoalObjective.
  * Absolutely zero hardcoded verb lists, first-word classifications, phrase lists,
- * question-word string matches (contains("what"), etc.), word-length heuristics, or regex intent classifiers.
- * Semantics and postcondition contracts are derived from model reasoning.
+ * question-word string matches, word-length heuristics, or fake fallback sentences.
  */
 object GoalUnderstandingEngine {
 
     fun createInitialInterpretation(goal: String): GoalInterpretation {
         val clean = goal.trim()
-        try { Log.i("ACE_GOAL_UNDERSTANDING", "ACE_GOAL_UNDERSTANDING: Creating initial neutral GoalInterpretation for goal='$clean'") } catch (_: Throwable) {}
+        try { Log.i("ACE_GOAL_UNDERSTANDING", "ACE_GOAL_UNDERSTANDING: Creating uninterpreted GoalInterpretation wrapper for goal='$clean'") } catch (_: Throwable) {}
 
         if (clean.isBlank()) {
             return GoalInterpretation(
                 rawGoal = clean,
                 requestedOutcome = "Clarification required",
+                clarificationRequired = true,
                 isAmbiguous = true,
                 clarificationQuestion = "Could you please specify what task or action you would like me to perform?"
             )
         }
 
-        // Semantic entity extraction (quoted strings or targets) without natural language intent classification
-        val entities = mutableListOf<String>()
-        val quoteMatches = Regex("\"([^\"]+)\"|'([^']+)'").findAll(clean)
-        quoteMatches.forEach { match ->
-            val e = match.groupValues[1].ifBlank { match.groupValues[2] }
-            if (e.isNotBlank()) entities.add(e)
-        }
-
         return GoalInterpretation(
             rawGoal = clean,
-            objectiveType = "GENERAL",
+            objectiveType = "UNINTERPRETED",
             requestedOutcome = clean,
-            targetEntities = entities.ifEmpty { listOf(clean) },
+            targetEntities = listOf(clean),
             constraints = emptyList(),
-            desiredFinalState = "Observable environment state established to fulfill: $clean",
-            desiredInformation = "Empirical evidence extracted answering goal: $clean",
-            successConditions = listOf("Goal '$clean' verified by empirical environment evidence"),
-            isAmbiguous = false,
+            temporalRequirements = emptyList(),
+            desiredFinalState = "",
+            desiredInformation = "",
+            successConditions = emptyList(),
+            unresolvedAmbiguities = emptyList(),
+            clarificationRequired = false,
             clarificationQuestion = null
         )
     }
@@ -97,12 +99,12 @@ object GoalUnderstandingEngine {
             requestedOutcome = interp.requestedOutcome.ifBlank { interp.rawGoal },
             primaryTarget = interp.rawGoal,
             isInformational = isInfo,
-            expectedOutcomeSummary = if (isInfo) "Verify information retrieved for '${interp.rawGoal}'" else "Verify observable state satisfied for '${interp.rawGoal}'",
+            expectedOutcomeSummary = interp.requestedOutcome.ifBlank { interp.rawGoal },
             desiredState = interp.desiredFinalState,
             desiredInformation = interp.desiredInformation,
-            targetEntities = interp.targetEntities.ifEmpty { listOf(interp.rawGoal) },
+            targetEntities = interp.targetEntities,
             constraints = interp.constraints,
-            isAmbiguous = interp.isAmbiguous,
+            isAmbiguous = interp.clarificationRequired || interp.isAmbiguous,
             clarificationQuestion = interp.clarificationQuestion
         )
     }
@@ -114,13 +116,13 @@ object GoalUnderstandingEngine {
 
     fun derivePostconditionFromInterpretation(interp: GoalInterpretation): ExpectedPostcondition {
         val isInfo = interp.objectiveType.equals("INFORMATION_RETRIEVAL", ignoreCase = true)
-        val summaryStr = if (isInfo) "Verify information retrieved for '${interp.rawGoal}'" else "Verify observable state satisfied for '${interp.rawGoal}'"
+        val outcomeSummary = interp.requestedOutcome.ifBlank { interp.rawGoal }
         return ExpectedPostcondition(
-            summary = summaryStr,
+            summary = outcomeSummary,
             desiredState = interp.desiredFinalState,
             desiredInformation = interp.desiredInformation,
             desiredEnvironmentCondition = if (isInfo) interp.desiredInformation else interp.desiredFinalState,
-            targetEntities = interp.targetEntities.ifEmpty { listOf(interp.rawGoal) },
+            targetEntities = interp.targetEntities,
             constraints = interp.constraints,
             successConditions = interp.successConditions
         )

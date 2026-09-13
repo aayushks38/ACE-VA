@@ -22,10 +22,40 @@ class AgentExecutor(private val context: Context?) {
         val initialContext = AgentTaskContext(userGoal = userGoal, generationId = generationId)
         val initialBrain = com.ace.app.brain.BrainRouter.selectBrain(userGoal, lastObservation, initialContext, localBrain, cloudBrain)
 
+        if (!initialBrain.isReady()) {
+            val blockedMsg = "No reasoning backend is ready to process user goal."
+            Log.w("ACE_REASON", "ACE_REASON: $blockedMsg")
+            val blockedTask = AgentTask(
+                goal = userGoal,
+                category = TaskCategory.GENERAL,
+                status = TaskStatus.BLOCKED,
+                summary = blockedMsg,
+                verificationResult = blockedMsg,
+                completedAt = System.currentTimeMillis()
+            )
+            onStepUpdated(blockedTask)
+            return blockedTask
+        }
+
         val interpretation = try {
             initialBrain.interpretGoal(userGoal, lastObservation, initialContext)
-        } catch (_: Exception) {
-            GoalUnderstandingEngine.createInitialInterpretation(userGoal)
+        } catch (e: Exception) {
+            GoalInterpretation(rawGoal = userGoal, objectiveType = "UNINTERPRETED_BACKEND_UNAVAILABLE")
+        }
+
+        if (interpretation.objectiveType == "UNINTERPRETED_BACKEND_UNAVAILABLE") {
+            val blockedMsg = "Cognition engine unavailable to interpret user goal."
+            Log.w("ACE_REASON", "ACE_REASON: $blockedMsg")
+            val blockedTask = AgentTask(
+                goal = userGoal,
+                category = TaskCategory.GENERAL,
+                status = TaskStatus.BLOCKED,
+                summary = blockedMsg,
+                verificationResult = blockedMsg,
+                completedAt = System.currentTimeMillis()
+            )
+            onStepUpdated(blockedTask)
+            return blockedTask
         }
 
         val objective = GoalUnderstandingEngine.convertInterpretationToObjective(interpretation)

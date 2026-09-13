@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
  * Pluggable Cloud Reasoning Provider.
  * Connects to a user-configured cloud endpoint (e.g., OpenAI / Gemini / Claude API).
  * Reads user-provided API credentials securely from app preferences.
- * Implements the exact same ReasoningBrain contract as local on-device inference.
+ * Implements the exact same ReasoningBrain cognitive contract as local on-device inference.
  */
 class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
 
@@ -49,10 +49,11 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
         goal: String,
         observation: ScreenObservation,
         context: AgentTaskContext
-    ): com.ace.app.agent.GoalInterpretation = withContext(Dispatchers.IO) {
+    ): GoalInterpretation = withContext(Dispatchers.IO) {
         val cleanGoal = goal.trim()
         if (!isReady()) {
-            return@withContext GoalUnderstandingEngine.createInitialInterpretation(cleanGoal)
+            Log.w(TAG, "ACE_CLOUD_BRAIN: Cloud reasoning brain is not ready (API key unconfigured).")
+            return@withContext GoalInterpretation(rawGoal = cleanGoal, objectiveType = "UNINTERPRETED_BACKEND_UNAVAILABLE")
         }
 
         val prefs = this@CloudReasoningBrain.context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -65,7 +66,7 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
             put("messages", org.json.JSONArray().apply {
                 put(JSONObject().apply {
                     put("role", "system")
-                    put("content", "Analyze the user's natural language goal semantically. Return JSON: {\"objectiveType\":\"INFORMATION_RETRIEVAL|STATE_MODIFICATION|GENERAL\",\"requestedOutcome\":\"<outcome>\",\"targetEntities\":[\"<entity>\"],\"desiredState\":\"<state>\",\"desiredInformation\":\"<info>\",\"isAmbiguous\":false,\"clarificationQuestion\":null}")
+                    put("content", "You are the cognitive goal understanding engine for ACE, an autonomous computer-use agent. Analyze natural language goal semantically. Return JSON: {\"objectiveType\":\"INFORMATION_RETRIEVAL|STATE_MODIFICATION|NAVIGATION|COMMUNICATION|TRANSACTION|GENERAL\",\"requestedOutcome\":\"<outcome>\",\"targetEntities\":[\"<entity>\"],\"constraints\":[\"<constraint>\"],\"temporalRequirements\":[],\"desiredFinalState\":\"<state>\",\"desiredInformation\":\"<info>\",\"successConditions\":[\"<condition>\"],\"unresolvedAmbiguities\":[],\"clarificationRequired\":false,\"clarificationQuestion\":null}")
                 })
                 put(JSONObject().apply {
                     put("role", "user")
@@ -97,28 +98,42 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
                 if (sStart != -1 && sEnd > sStart) {
                     val json = JSONObject(rawTrimmed.substring(sStart, sEnd + 1))
                     val typeStr = json.optString("objectiveType", "GENERAL")
-                    val isAmbig = json.optBoolean("isAmbiguous", false)
+                    val isAmbig = json.optBoolean("clarificationRequired", json.optBoolean("isAmbiguous", false))
                     val q = if (isAmbig) json.optString("clarificationQuestion", "Could you clarify your goal?") else null
+                    
                     val entities = mutableListOf<String>()
-                    val arr = json.optJSONArray("targetEntities")
-                    if (arr != null) {
-                        for (i in 0 until arr.length()) entities.add(arr.optString(i))
+                    val arrEnt = json.optJSONArray("targetEntities")
+                    if (arrEnt != null) {
+                        for (i in 0 until arrEnt.length()) entities.add(arrEnt.optString(i))
                     }
-                    return@withContext com.ace.app.agent.GoalInterpretation(
+
+                    val reqs = mutableListOf<String>()
+                    val arrReq = json.optJSONArray("successConditions")
+                    if (arrReq != null) {
+                        for (i in 0 until arrReq.length()) reqs.add(arrReq.optString(i))
+                    }
+
+                    return@withContext GoalInterpretation(
                         rawGoal = cleanGoal,
                         objectiveType = typeStr,
                         requestedOutcome = json.optString("requestedOutcome", cleanGoal),
-                        targetEntities = entities.ifEmpty { listOf(cleanGoal) },
-                        desiredFinalState = json.optString("desiredState", "Observable state for $cleanGoal"),
-                        desiredInformation = json.optString("desiredInformation", "Information for $cleanGoal"),
-                        isAmbiguous = isAmbig,
+                        targetEntities = entities,
+                        constraints = emptyList(),
+                        temporalRequirements = emptyList(),
+                        desiredFinalState = json.optString("desiredFinalState", ""),
+                        desiredInformation = json.optString("desiredInformation", ""),
+                        successConditions = reqs,
+                        unresolvedAmbiguities = emptyList(),
+                        clarificationRequired = isAmbig,
                         clarificationQuestion = q
                     )
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "ACE_CLOUD_BRAIN: interpretGoal error: ${e.message}")
+        }
 
-        return@withContext GoalUnderstandingEngine.createInitialInterpretation(cleanGoal)
+        return@withContext GoalInterpretation(rawGoal = cleanGoal, objectiveType = "UNINTERPRETED_BACKEND_UNAVAILABLE")
     }
 
     override suspend fun reasonNextDecision(
@@ -143,14 +158,14 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
             put("messages", org.json.JSONArray().apply {
                 put(JSONObject().apply {
                     put("role", "system")
-                    put("content", "You are ACE, an autonomous general computer-use agent for Android. Return compact JSON with status: DONE|CONTINUE|CLARIFY|REPLAN|BLOCKED, action: ui_click|ui_type|ui_scroll|web_open_url|ui_open_app, target, text, question, reason.")
+                    put("content", "You are ACE, an autonomous computer-use reasoning model for Android. Based on the user goal, postcondition, previous actions, and observation tree, select ONE next decision. Return JSON with status: DONE|CONTINUE|CLARIFY|REPLAN|BLOCKED, action: ui_click|ui_type|ui_scroll|web_open_url|ui_open_app, target, text, question, reason.")
                 })
                 put(JSONObject().apply {
                     val postconditionSummary = context.expectedPostcondition.summary.ifBlank { goal }
                     val historyStr = context.actionHistory.takeLast(4).joinToString("; ")
                     val blockersStr = context.blockers.joinToString("; ")
                     put("role", "user")
-                    put("content", "Goal: $goal\nExpected Outcome: $postconditionSummary\nPrevious Actions: $historyStr\nBlockers: $blockersStr\nPerception Available: ${observation.isPerceptionAvailable}\nObservation:\n$compactUi")
+                    put("content", "Goal: $goal\nExpected Outcome: $postconditionSummary\nDesired State: ${context.expectedPostcondition.desiredState}\nDesired Info: ${context.expectedPostcondition.desiredInformation}\nTarget Entities: ${context.expectedPostcondition.targetEntities}\nPrevious Actions: $historyStr\nBlockers: $blockersStr\nPerception Available: ${observation.isPerceptionAvailable}\nObservation:\n$compactUi")
                 })
             })
             put("temperature", 0.1)
@@ -188,6 +203,12 @@ class CloudReasoningBrain(private val context: Context) : ReasoningBrain {
                     }
                     status == "DONE" || status == "COMPLETE" -> {
                         AgentDecision.Complete(parsedObj.optString("reason", "Goal satisfied"))
+                    }
+                    status == "REPLAN" -> {
+                        AgentDecision.Replan(parsedObj.optString("updatedGoal", goal))
+                    }
+                    status == "BLOCKED" -> {
+                        AgentDecision.Blocked(parsedObj.optString("reason", "Action blocked"))
                     }
                     else -> {
                         AgentDecision.Action(

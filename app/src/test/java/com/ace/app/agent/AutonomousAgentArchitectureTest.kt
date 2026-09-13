@@ -38,7 +38,11 @@ class AutonomousAgentArchitectureTest {
     // 3. Multi-condition goals preserve all required success conditions.
     @Test
     fun testMultiConditionGoalPreservesSuccessConditions() {
-        val postcondition = GoalUnderstandingEngine.derivePostcondition("Find \"Order 1234\" and verify \"Delivered\"")
+        val modelInterp = GoalInterpretation(
+            rawGoal = "Find \"Order 1234\" and verify \"Delivered\"",
+            targetEntities = listOf("Order 1234", "Delivered")
+        )
+        val postcondition = GoalUnderstandingEngine.derivePostconditionFromInterpretation(modelInterp)
         assertEquals(2, postcondition.targetEntities.size)
         assertTrue(postcondition.targetEntities.contains("Order 1234"))
         assertTrue(postcondition.targetEntities.contains("Delivered"))
@@ -198,7 +202,7 @@ class AutonomousAgentArchitectureTest {
         context.expectedPostcondition = GoalUnderstandingEngine.derivePostcondition(newGoal)
 
         assertEquals("Updated target goal", context.userGoal)
-        assertEquals("Verify observable state satisfied for 'Updated target goal'", context.expectedPostcondition.summary)
+        assertEquals("Updated target goal", context.expectedPostcondition.summary)
     }
 
     // 12. Local and cloud brains emit the same AgentDecision contract.
