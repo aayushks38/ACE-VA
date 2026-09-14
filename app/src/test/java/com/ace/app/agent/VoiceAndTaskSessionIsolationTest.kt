@@ -187,4 +187,18 @@ class VoiceAndTaskSessionIsolationTest {
             assertEquals(goal, currentUiTaskGoal)
         }
     }
+
+    // 10. Old TTS/progress callbacks cannot modify current task state.
+    @Test
+    fun testOldTtsAndProgressCallbacksCannotModifyCurrentTask() {
+        val taskGen1 = activeTaskGen.incrementAndGet()
+        updateTaskUi(taskGen1, "Task 1")
+
+        val taskGen2 = activeTaskGen.incrementAndGet()
+        updateTaskUi(taskGen2, "Task 2")
+
+        val staleProgressAccepted = updateTaskUi(taskGen1, "Progress for Task 1: Opening app...")
+        assertFalse("Stale TTS/progress callback must be rejected", staleProgressAccepted)
+        assertEquals("Task 2", currentUiTaskGoal)
+    }
 }

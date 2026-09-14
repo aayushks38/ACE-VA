@@ -92,7 +92,7 @@ class VoiceManager(
             partialResultsCount = 0
             finalResultsCount = 0
             
-            Log.i("ACE_VOICE", "VOICE_SESSION_START generation=$sessionGen")
+            Log.i("ACE_VOICE", "VOICE_SESSION_START id=$sessionGen generation=$sessionGen")
             Log.i("ACE_SESSION", "ACE_SESSION: tap_received generation=$sessionGen")
             Log.i("ACE_SESSION", "ACE_SESSION: state_transition=IDLE→LISTENING")
             Log.i("ACE_VOICE", "ACE_VOICE: listening_start immediately")
@@ -128,7 +128,7 @@ class VoiceManager(
                     private fun isCurrentGen(): Boolean {
                         val activeGen = voiceSessionGeneration.get()
                         if (capturedGen != activeGen) {
-                            Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale_generation=$capturedGen active_generation=$activeGen")
+                            Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=$activeGen stale_generation=$capturedGen active_generation=$activeGen")
                             return false
                         }
                         return true
@@ -203,7 +203,7 @@ class VoiceManager(
 
                         val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         val spokenText = matches?.firstOrNull()?.trim().orEmpty()
-                        Log.i("ACE_VOICE", "VOICE_FINAL generation=$capturedGen transcript_length=${spokenText.length}")
+                        Log.i("ACE_VOICE", "VOICE_FINAL id=$capturedGen length=${spokenText.length} generation=$capturedGen transcript_length=${spokenText.length}")
                         Log.i("ACE_SESSION", "ACE_SESSION: state_transition=THINKING→IDLE_pending_route")
                         updateState(VoiceState.IDLE)
                         val isValid = isValidVoiceCommand(spokenText)
@@ -215,7 +215,11 @@ class VoiceManager(
                             com.ace.app.utils.AceLatencyTracker.startTask()
                             Log.i("ACE_SPEECH", "ACE_SPEECH: session=$currentSession final_result=\"$spokenText\" execute=true synthetic_event=false generation=$capturedGen")
                             Log.i("ACE_COMMAND", "ACE_COMMAND: session=$currentSession routing_started=true goal=\"$spokenText\" generation=$capturedGen")
-                            mainHandler.post { onSpeechRecognized(spokenText) }
+                            mainHandler.post {
+                                if (isCurrentGen()) {
+                                    onSpeechRecognized(spokenText)
+                                }
+                            }
                         } else {
                             Log.w("ACE_SPEECH", "ACE_SPEECH: session=$currentSession rejected_invalid_command=\"$spokenText\" execute=false generation=$capturedGen")
                             safeOnError("Invalid or empty speech input")
@@ -227,7 +231,7 @@ class VoiceManager(
                         partialResultsCount++
                         val partial = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
                         if (!partial.isNullOrBlank()) {
-                            Log.i("ACE_VOICE", "VOICE_PARTIAL generation=$capturedGen")
+                            Log.i("ACE_VOICE", "VOICE_PARTIAL id=$capturedGen length=${partial.length} generation=$capturedGen")
                             Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId partial_result=\"$partial\" execute=false generation=$capturedGen")
                         }
                     }

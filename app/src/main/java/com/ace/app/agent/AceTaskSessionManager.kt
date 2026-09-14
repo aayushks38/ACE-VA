@@ -31,6 +31,7 @@ object AceTaskSessionManager {
         executionJob?.cancel()
         activeJob?.cancel()
 
+        Log.i("ACE_TASK", "TASK_SESSION_CANCEL generation=$oldGenId")
         Log.i("ACE_INTERRUPT", "ACE_INTERRUPT: detected=true")
         Log.i("ACE_INTERRUPT", "ACE_INTERRUPT: new user command detected")
         Log.i("ACE_INTERRUPT", "ACE_INTERRUPT: previous_task_id=task_$oldGenId")
@@ -62,6 +63,7 @@ object AceTaskSessionManager {
         AceConversationContext.clearSession()
 
         Log.i("ACE_ROUTER", "ACE_ROUTER: processing newest command")
+        Log.i("ACE_TASK", "TASK_SESSION_START generation=$newGenId")
         Log.i("ACE_TASK", "ACE_TASK: generation=$newGenId goal=\"$newGoal\"")
         Log.i("ACE_TASK", "ACE_TASK: active_task_id=task_$newGenId")
 
@@ -73,8 +75,11 @@ object AceTaskSessionManager {
         val activeGen = currentGenerationId.get()
         val matches = generationId == activeGen
         if (!matches) {
+            Log.w("ACE_TASK", "TASK_EVENT_IGNORED stale=$generationId active=$activeGen")
             Log.w("ACE_TASK", "TASK_CALLBACK_IGNORED stale_generation=$generationId active_generation=$activeGen")
             Log.w("ACE_TASK", "ACE_TASK: STALE_REJECTED eventGeneration=$generationId currentGeneration=$activeGen")
+        } else {
+            Log.i("ACE_TASK", "TASK_EVENT generation=$generationId")
         }
         return matches
     }
@@ -82,6 +87,7 @@ object AceTaskSessionManager {
     fun validateOrDiscard(generationId: Long, sourceTag: String): Boolean {
         val activeGen = currentGenerationId.get()
         if (generationId != 0L && generationId != activeGen) {
+            Log.w("ACE_TASK", "TASK_EVENT_IGNORED stale=$generationId active=$activeGen")
             Log.w("ACE_TASK", "TASK_CALLBACK_IGNORED stale_generation=$generationId active_generation=$activeGen")
             Log.w("ACE_TASK", "ACE_TASK: STALE_REJECTED eventGeneration=$generationId currentGeneration=$activeGen")
             Log.w("ACE_TASK", "ACE_TASK: stale_result_detected")
