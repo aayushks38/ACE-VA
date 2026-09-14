@@ -17,10 +17,7 @@ class AgentExecutor(private val context: Context?) {
         onConversationalResponse: (String) -> Unit,
         generationId: Long
     ): AgentTask {
-        val initialService = com.ace.app.accessibility.AceAccessibilityService.getInstance()
-        val initialRoot = initialService?.rootInActiveWindow
-        val initialPkg = initialRoot?.packageName?.toString() ?: "android"
-        var lastObservation = ScreenObservationEngine.captureObservation(initialRoot, initialPkg, initialPkg)
+        var lastObservation = captureLiveObservation()
         val initialContext = AgentTaskContext(userGoal = userGoal, generationId = generationId)
         val initialBrain = com.ace.app.brain.BrainRouter.selectBrain(userGoal, lastObservation, initialContext, localBrain)
         val brainInstanceId = System.identityHashCode(initialBrain)
