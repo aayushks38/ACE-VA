@@ -212,6 +212,7 @@ class VoiceManager(
                         val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         val spokenText = matches?.firstOrNull()?.trim().orEmpty()
                         currentTranscript = spokenText
+                        Log.i("ACE_VOICE", "VOICE_FINAL generation=$capturedGen text=\"$spokenText\"")
                         Log.i("ACE_VOICE", "VOICE_FINAL id=$capturedGen length=${spokenText.length} generation=$capturedGen transcript_length=${spokenText.length}")
                         Log.i("ACE_SESSION", "ACE_SESSION: state_transition=THINKING→IDLE_pending_route")
                         updateState(VoiceState.IDLE)
@@ -222,6 +223,7 @@ class VoiceManager(
                         if (isValid) {
                             processedSessionIds.add(currentSession)
                             com.ace.app.utils.AceLatencyTracker.startTask()
+                            Log.i("ACE_VOICE", "TASK_SUBMIT generation=$capturedGen text=\"$spokenText\"")
                             Log.i("ACE_VOICE", "VOICE_SUBMIT id=$capturedGen length=${spokenText.length}")
                             Log.i("ACE_SPEECH", "ACE_SPEECH: session=$currentSession final_result=\"$spokenText\" execute=true synthetic_event=false generation=$capturedGen")
                             Log.i("ACE_COMMAND", "ACE_COMMAND: session=$currentSession routing_started=true goal=\"$spokenText\" generation=$capturedGen")

@@ -249,6 +249,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         
         val generationId = AceTaskSessionManager.startNewSession(cleanGoal, brain, voiceManager, executionJob)
         currentGeneration.set(generationId)
+        android.util.Log.i("ACE_TASK", "TASK_SUBMIT generation=$generationId text=\"$cleanGoal\" sourceVoiceGeneration=$sourceVoiceGenId")
         android.util.Log.i("ACE_TASK", "TASK_SESSION_START generation=$generationId sourceVoiceGeneration=$sourceVoiceGenId goal_length=${cleanGoal.length}")
         android.util.Log.i("ACE_TASK", "TASK_UI_STATE generation=$generationId")
 
