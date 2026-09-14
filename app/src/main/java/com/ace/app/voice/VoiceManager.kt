@@ -78,6 +78,9 @@ class VoiceManager(
 
     fun startListening(sessionId: String = "voice_session_${System.currentTimeMillis()}", retryCount: Int = 0) {
         mainHandler.post {
+            // Remove any pending delayed runnables or callbacks from previous sessions
+            mainHandler.removeCallbacksAndMessages(null)
+
             // Cleanly tear down any ongoing recognition session or TTS playback
             rimeOutput?.stop()
             try {
@@ -100,7 +103,7 @@ class VoiceManager(
             
             Log.i("ACE_VOICE", "VOICE_SESSION_RESET id=$sessionGen")
             Log.i("ACE_VOICE", "VOICE_TRANSCRIPT_CLEARED id=$sessionGen")
-            Log.i("ACE_VOICE", "VOICE_SESSION_START id=$sessionGen generation=$sessionGen")
+            Log.i("ACE_VOICE", "VOICE_SESSION_START generation=$sessionGen id=$sessionGen")
             Log.i("ACE_SESSION", "ACE_SESSION: tap_received generation=$sessionGen")
             Log.i("ACE_SESSION", "ACE_SESSION: state_transition=IDLE→LISTENING")
             Log.i("ACE_VOICE", "ACE_VOICE: listening_start immediately")
