@@ -70,20 +70,24 @@ object AceTaskSessionManager {
 
     fun isCurrentGeneration(generationId: Long): Boolean {
         if (generationId == 0L) return true
-        val matches = generationId == currentGenerationId.get()
+        val activeGen = currentGenerationId.get()
+        val matches = generationId == activeGen
         if (!matches) {
-            Log.w("ACE_TASK", "ACE_TASK: STALE_REJECTED eventGeneration=$generationId currentGeneration=${currentGenerationId.get()}")
+            Log.w("ACE_TASK", "TASK_CALLBACK_IGNORED stale_generation=$generationId active_generation=$activeGen")
+            Log.w("ACE_TASK", "ACE_TASK: STALE_REJECTED eventGeneration=$generationId currentGeneration=$activeGen")
         }
         return matches
     }
 
     fun validateOrDiscard(generationId: Long, sourceTag: String): Boolean {
-        if (generationId != 0L && generationId != currentGenerationId.get()) {
-            Log.w("ACE_TASK", "ACE_TASK: STALE_REJECTED eventGeneration=$generationId currentGeneration=${currentGenerationId.get()}")
+        val activeGen = currentGenerationId.get()
+        if (generationId != 0L && generationId != activeGen) {
+            Log.w("ACE_TASK", "TASK_CALLBACK_IGNORED stale_generation=$generationId active_generation=$activeGen")
+            Log.w("ACE_TASK", "ACE_TASK: STALE_REJECTED eventGeneration=$generationId currentGeneration=$activeGen")
             Log.w("ACE_TASK", "ACE_TASK: stale_result_detected")
             Log.w("ACE_TASK", "ACE_TASK: generation_mismatch")
             Log.w("ACE_TASK", "ACE_TASK: stale_result_discarded=true")
-            Log.w("ACE_TASK", "ACE_TASK: discarded callback from $sourceTag (received=$generationId, current=${currentGenerationId.get()})")
+            Log.w("ACE_TASK", "ACE_TASK: discarded callback from $sourceTag (received=$generationId, current=$activeGen)")
             return false
         }
         return true

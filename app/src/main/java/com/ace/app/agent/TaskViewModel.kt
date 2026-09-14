@@ -223,6 +223,17 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         return false
     }
 
+    fun prepareForNewVoiceInput() {
+        val gen = currentGeneration.get()
+        android.util.Log.i("ACE_TASK", "TASK_UI_STATE generation=$gen")
+        _uiState.value = _uiState.value.copy(
+            activeTask = null,
+            lastHeard = null,
+            announcement = "",
+            currentActionLabel = ""
+        )
+    }
+
     fun submitVoiceGoal(goal: String) {
         val cleanGoal = goal.trim()
         if (cleanGoal.isBlank()) return
@@ -234,6 +245,8 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         
         val generationId = AceTaskSessionManager.startNewSession(cleanGoal, brain, voiceManager, executionJob)
         currentGeneration.set(generationId)
+        android.util.Log.i("ACE_TASK", "TASK_SESSION_START generation=$generationId goal_length=${cleanGoal.length}")
+        android.util.Log.i("ACE_TASK", "TASK_UI_STATE generation=$generationId")
 
         // Clear active task UI card immediately for fresh session
         _uiState.value = _uiState.value.copy(

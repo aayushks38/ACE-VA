@@ -34,8 +34,11 @@ class VoiceManager(
 
     private var activeSessionId: String = ""
     private val processedSessionIds = HashSet<String>()
+    private val voiceSessionGeneration = java.util.concurrent.atomic.AtomicLong(0L)
     var partialResultsCount: Int = 0
     var finalResultsCount: Int = 0
+
+    fun getActiveGenerationId(): Long = voiceSessionGeneration.get()
 
     val currentProvider: VoiceProvider
         get() = rimeOutput?.currentProvider ?: VoiceProvider.DEVICE_FALLBACK
@@ -79,15 +82,22 @@ class VoiceManager(
             } catch (_: Exception) {}
             recognizer = null
 
+            val sessionGen = if (retryCount == 0) {
+                voiceSessionGeneration.incrementAndGet()
+            } else {
+                voiceSessionGeneration.get()
+            }
+
             activeSessionId = sessionId
             partialResultsCount = 0
             finalResultsCount = 0
             
-            Log.i("ACE_SESSION", "ACE_SESSION: tap_received")
+            Log.i("ACE_VOICE", "VOICE_SESSION_START generation=$sessionGen")
+            Log.i("ACE_SESSION", "ACE_SESSION: tap_received generation=$sessionGen")
             Log.i("ACE_SESSION", "ACE_SESSION: state_transition=IDLE→LISTENING")
             Log.i("ACE_VOICE", "ACE_VOICE: listening_start immediately")
             
-            Log.i("ACE_MIC", "ACE_MIC: mic_active=true mic_owner=SpeechRecognizer session=$sessionId synthetic_event=false")
+            Log.i("ACE_MIC", "ACE_MIC: mic_active=true mic_owner=SpeechRecognizer session=$sessionId synthetic_event=false generation=$sessionGen")
             if (currentState == VoiceState.SPEAKING) {
                 Log.i("ACE_INTERRUPT", "ACE_INTERRUPT: user speech barge-in detected during TTS")
                 Log.i("ACE_TTS", "ACE_TTS: speech stopped")
@@ -112,15 +122,28 @@ class VoiceManager(
                 recognizer?.destroy()
                 recognizer = null
 
+                val capturedGen = sessionGen
+
                 val listener = object : RecognitionListener {
+                    private fun isCurrentGen(): Boolean {
+                        val activeGen = voiceSessionGeneration.get()
+                        if (capturedGen != activeGen) {
+                            Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale_generation=$capturedGen active_generation=$activeGen")
+                            return false
+                        }
+                        return true
+                    }
+
                     override fun onReadyForSpeech(params: Bundle?) {
-                        Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId ready_for_speech=true")
+                        if (!isCurrentGen()) return
+                        Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId ready_for_speech=true generation=$capturedGen")
                         updateState(VoiceState.LISTENING)
                     }
 
                     override fun onBeginningOfSpeech() {
-                        Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId speech_started=true")
-                        Log.i("ACE_MIC", "ACE_MIC: mic_active=true mic_source=DEVICE_HARDWARE_MIC session=$activeSessionId synthetic_event=false")
+                        if (!isCurrentGen()) return
+                        Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId speech_started=true generation=$capturedGen")
+                        Log.i("ACE_MIC", "ACE_MIC: mic_active=true mic_source=DEVICE_HARDWARE_MIC session=$activeSessionId synthetic_event=false generation=$capturedGen")
                         updateState(VoiceState.LISTENING)
                         mainHandler.post { onSpeechStart?.invoke() }
                     }
@@ -130,14 +153,16 @@ class VoiceManager(
                     override fun onBufferReceived(buffer: ByteArray?) {}
 
                     override fun onEndOfSpeech() {
-                        Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId speech_ended=true")
-                        Log.i("ACE_MIC", "ACE_MIC: mic_active=false session=$activeSessionId synthetic_event=false")
+                        if (!isCurrentGen()) return
+                        Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId speech_ended=true generation=$capturedGen")
+                        Log.i("ACE_MIC", "ACE_MIC: mic_active=false session=$activeSessionId synthetic_event=false generation=$capturedGen")
                         Log.i("ACE_SESSION", "ACE_SESSION: state_transition=LISTENING→THINKING")
                         updateState(VoiceState.THINKING)
                         mainHandler.post { onSpeechEnd?.invoke() }
                     }
 
                     override fun onError(error: Int) {
+                        if (!isCurrentGen()) return
                         val message = when (error) {
                             SpeechRecognizer.ERROR_NO_MATCH -> "No speech match detected."
                             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Listening timed out."
@@ -150,7 +175,7 @@ class VoiceManager(
                             SpeechRecognizer.ERROR_SERVER -> "Speech server error."
                             else -> "Speech recognition issue ($error)."
                         }
-                        Log.w("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId error_code=$error message=\"$message\"")
+                        Log.w("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId error_code=$error message=\"$message\" generation=$capturedGen")
                         Log.i("ACE_SESSION", "ACE_SESSION: state_transition=THINKING→IDLE")
                         updateState(VoiceState.IDLE)
 
@@ -168,15 +193,17 @@ class VoiceManager(
                     }
 
                     override fun onResults(results: Bundle?) {
+                        if (!isCurrentGen()) return
                         finalResultsCount++
                         val currentSession = activeSessionId
                         if (processedSessionIds.contains(currentSession)) {
-                            Log.w("ACE_SPEECH", "ACE_SPEECH: session=$currentSession duplicate_onResults_ignored")
+                            Log.w("ACE_SPEECH", "ACE_SPEECH: session=$currentSession duplicate_onResults_ignored generation=$capturedGen")
                             return
                         }
 
                         val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         val spokenText = matches?.firstOrNull()?.trim().orEmpty()
+                        Log.i("ACE_VOICE", "VOICE_FINAL generation=$capturedGen transcript_length=${spokenText.length}")
                         Log.i("ACE_SESSION", "ACE_SESSION: state_transition=THINKING→IDLE_pending_route")
                         updateState(VoiceState.IDLE)
                         val isValid = isValidVoiceCommand(spokenText)
@@ -186,20 +213,22 @@ class VoiceManager(
                         if (isValid) {
                             processedSessionIds.add(currentSession)
                             com.ace.app.utils.AceLatencyTracker.startTask()
-                            Log.i("ACE_SPEECH", "ACE_SPEECH: session=$currentSession final_result=\"$spokenText\" execute=true synthetic_event=false")
-                            Log.i("ACE_COMMAND", "ACE_COMMAND: session=$currentSession routing_started=true goal=\"$spokenText\"")
+                            Log.i("ACE_SPEECH", "ACE_SPEECH: session=$currentSession final_result=\"$spokenText\" execute=true synthetic_event=false generation=$capturedGen")
+                            Log.i("ACE_COMMAND", "ACE_COMMAND: session=$currentSession routing_started=true goal=\"$spokenText\" generation=$capturedGen")
                             mainHandler.post { onSpeechRecognized(spokenText) }
                         } else {
-                            Log.w("ACE_SPEECH", "ACE_SPEECH: session=$currentSession rejected_invalid_command=\"$spokenText\" execute=false")
+                            Log.w("ACE_SPEECH", "ACE_SPEECH: session=$currentSession rejected_invalid_command=\"$spokenText\" execute=false generation=$capturedGen")
                             safeOnError("Invalid or empty speech input")
                         }
                     }
 
                     override fun onPartialResults(partialResults: Bundle?) {
+                        if (!isCurrentGen()) return
                         partialResultsCount++
                         val partial = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
                         if (!partial.isNullOrBlank()) {
-                            Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId partial_result=\"$partial\" execute=false")
+                            Log.i("ACE_VOICE", "VOICE_PARTIAL generation=$capturedGen")
+                            Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId partial_result=\"$partial\" execute=false generation=$capturedGen")
                         }
                     }
 

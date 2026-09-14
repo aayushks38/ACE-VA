@@ -156,6 +156,7 @@ fun HomeScreen(
     }
 
     fun triggerVoiceInput() {
+        viewModel.prepareForNewVoiceInput()
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             voiceManager.startListening()
         } else {
