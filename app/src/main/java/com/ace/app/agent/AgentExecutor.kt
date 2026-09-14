@@ -234,15 +234,21 @@ class AgentExecutor(private val context: Context?) {
 
                 is com.ace.app.brain.AgentDecision.Wait -> {
                     delay(decision.durationMs)
-                    lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
+                    val service = com.ace.app.accessibility.AceAccessibilityService.getInstance()
+                    val activeRoot = service?.rootInActiveWindow
+                    val activePkg = activeRoot?.packageName?.toString() ?: "android"
+                    lastObservation = ScreenObservationEngine.captureObservation(activeRoot, activePkg, activePkg)
                 }
 
                 is com.ace.app.brain.AgentDecision.Replan -> {
                     Log.i("ACE_REASON", "ACE_REASON: Replan requested updatedGoal=\"${decision.updatedGoal}\" reason=\"${decision.reason}\"")
                     taskContext.userGoal = decision.updatedGoal
                     taskContext.expectedPostcondition = decision.updatedPostcondition ?: GoalUnderstandingEngine.derivePostcondition(decision.updatedGoal)
-                    taskContext.actionHistory.add("Replan: Goal updated to '${decision.updatedGoal}'")
-                    lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
+                    taskContext.actionHistory.add("Replan: Goal updated to '${decision.updatedGoal}' (reason: ${decision.reason})")
+                    val service = com.ace.app.accessibility.AceAccessibilityService.getInstance()
+                    val activeRoot = service?.rootInActiveWindow
+                    val activePkg = activeRoot?.packageName?.toString() ?: "android"
+                    lastObservation = ScreenObservationEngine.captureObservation(activeRoot, activePkg, activePkg)
                 }
 
                 is com.ace.app.brain.AgentDecision.Blocked -> {

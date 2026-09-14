@@ -518,7 +518,7 @@ class GemmaLocalBrain : LocalBrain {
             append("<start_of_turn>user\n")
             append("You are ACE, an autonomous computer-use agent for Android operating a real device.\n")
             append("The current observation is authoritative. Inspect environment before deciding.\n")
-            append("Goal: $cleanGoal\n")
+            append("Goal: ${context.userGoal.ifBlank { cleanGoal }}\n")
             append("Expected Outcome: $postconditionSummary\n")
             if (context.expectedPostcondition.targetEntities.isNotEmpty()) {
                 append("Target Entities: ${context.expectedPostcondition.targetEntities}\n")
