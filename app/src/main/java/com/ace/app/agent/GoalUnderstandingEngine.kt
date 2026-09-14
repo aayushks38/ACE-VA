@@ -68,6 +68,26 @@ object GoalUnderstandingEngine {
             )
         }
 
+        val lower = clean.lowercase()
+        val isUnderspecified = lower in setOf("find me the latest", "find the latest", "book it", "send this", "get me a ticket", "order it", "schedule it") ||
+                Regex("""^(find|get|show|open|send|book|order|schedule)\s+(me\s+)?(the\s+latest|it|this|that|a|an)$""", RegexOption.IGNORE_CASE).matches(clean)
+
+        if (isUnderspecified) {
+            val question = when {
+                lower.contains("latest") -> "Could you specify what you'd like me to find the latest information about?"
+                lower.contains("send") -> "Could you specify what or to whom you'd like to send?"
+                lower.contains("book") || lower.contains("ticket") || lower.contains("order") -> "Could you specify what you'd like to book or order?"
+                else -> "Could you please specify what you'd like me to find or do?"
+            }
+            return GoalInterpretation(
+                rawGoal = clean,
+                requestedOutcome = "Clarification required for underspecified goal",
+                clarificationRequired = true,
+                isAmbiguous = true,
+                clarificationQuestion = question
+            )
+        }
+
         return GoalInterpretation(
             rawGoal = clean,
             objectiveType = "UNINTERPRETED",

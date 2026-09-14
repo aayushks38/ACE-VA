@@ -97,7 +97,7 @@ class AgentExecutor(private val context: Context?) {
         onStepUpdated(currentTask)
 
         val maxIterations = 8
-        lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
+        lastObservation = captureLiveObservation()
 
         for (iteration in 1..maxIterations) {
             if (!AceTaskSessionManager.isCurrentGeneration(generationId)) {
@@ -177,7 +177,7 @@ class AgentExecutor(private val context: Context?) {
                         }
 
                         delay(600)
-                        lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
+                        lastObservation = captureLiveObservation()
                     }
                 }
 
@@ -220,24 +220,12 @@ class AgentExecutor(private val context: Context?) {
 
                     // Brief delay for UI pre-render / settle, then capture FRESH observation using live accessibility tree
                     delay(600)
-                    val service = com.ace.app.accessibility.AceAccessibilityService.getInstance()
-                    val activeRoot = service?.rootInActiveWindow
-                    val activePkg = activeRoot?.packageName?.toString() ?: "android"
-                    lastObservation = ScreenObservationEngine.waitForUiSettled(
-                        previousObservation = obs,
-                        fetchFreshRoot = { com.ace.app.accessibility.AceAccessibilityService.getInstance()?.rootInActiveWindow },
-                        currentPackage = activePkg,
-                        appName = activePkg,
-                        maxWaitMs = 800L
-                    )
+                    lastObservation = captureLiveObservation(obs)
                 }
 
                 is com.ace.app.brain.AgentDecision.Wait -> {
                     delay(decision.durationMs)
-                    val service = com.ace.app.accessibility.AceAccessibilityService.getInstance()
-                    val activeRoot = service?.rootInActiveWindow
-                    val activePkg = activeRoot?.packageName?.toString() ?: "android"
-                    lastObservation = ScreenObservationEngine.captureObservation(activeRoot, activePkg, activePkg)
+                    lastObservation = captureLiveObservation()
                 }
 
                 is com.ace.app.brain.AgentDecision.Replan -> {
@@ -245,10 +233,7 @@ class AgentExecutor(private val context: Context?) {
                     taskContext.userGoal = decision.updatedGoal
                     taskContext.expectedPostcondition = decision.updatedPostcondition ?: GoalUnderstandingEngine.derivePostcondition(decision.updatedGoal)
                     taskContext.actionHistory.add("Replan: Goal updated to '${decision.updatedGoal}' (reason: ${decision.reason})")
-                    val service = com.ace.app.accessibility.AceAccessibilityService.getInstance()
-                    val activeRoot = service?.rootInActiveWindow
-                    val activePkg = activeRoot?.packageName?.toString() ?: "android"
-                    lastObservation = ScreenObservationEngine.captureObservation(activeRoot, activePkg, activePkg)
+                    lastObservation = captureLiveObservation()
                 }
 
                 is com.ace.app.brain.AgentDecision.Blocked -> {
@@ -268,7 +253,7 @@ class AgentExecutor(private val context: Context?) {
         currentTask = currentTask.copy(status = TaskStatus.VERIFYING)
         onStepUpdated(currentTask)
 
-        val finalObs = ScreenObservationEngine.captureObservation(null, "android", "System")
+        val finalObs = captureLiveObservation()
         val finalOutcome = IndependentGoalVerifier.verifyGoal(taskContext, finalObs, context)
 
         Log.i("ACE_VERIFY", "ACE_VERIFY: Final safety-limit verification status=${finalOutcome.status} isVerified=${finalOutcome.isVerified} summary=${finalOutcome.summary}")
@@ -886,5 +871,22 @@ class AgentExecutor(private val context: Context?) {
         }
 
         return actionResult
+    }
+
+    private suspend fun captureLiveObservation(previousObservation: ScreenObservation? = null): ScreenObservation {
+        val service = com.ace.app.accessibility.AceAccessibilityService.getInstance()
+        val activeRoot = service?.rootInActiveWindow
+        val activePkg = activeRoot?.packageName?.toString() ?: "android"
+        return if (previousObservation != null) {
+            ScreenObservationEngine.waitForUiSettled(
+                previousObservation = previousObservation,
+                fetchFreshRoot = { com.ace.app.accessibility.AceAccessibilityService.getInstance()?.rootInActiveWindow },
+                currentPackage = activePkg,
+                appName = activePkg,
+                maxWaitMs = 600L
+            )
+        } else {
+            ScreenObservationEngine.captureObservation(activeRoot, activePkg, activePkg)
+        }
     }
 }
