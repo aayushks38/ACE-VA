@@ -17,7 +17,10 @@ class AgentExecutor(private val context: Context?) {
         onConversationalResponse: (String) -> Unit,
         generationId: Long
     ): AgentTask {
-        var lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
+        val initialService = com.ace.app.accessibility.AceAccessibilityService.getInstance()
+        val initialRoot = initialService?.rootInActiveWindow
+        val initialPkg = initialRoot?.packageName?.toString() ?: "android"
+        var lastObservation = ScreenObservationEngine.captureObservation(initialRoot, initialPkg, initialPkg)
         val initialContext = AgentTaskContext(userGoal = userGoal, generationId = generationId)
         val initialBrain = com.ace.app.brain.BrainRouter.selectBrain(userGoal, lastObservation, initialContext, localBrain)
         val brainInstanceId = System.identityHashCode(initialBrain)
@@ -206,6 +209,8 @@ class AgentExecutor(private val context: Context?) {
                         universalResult.outputData.forEach { (k, v) ->
                             taskContext.capturedEvidence[k] = v
                         }
+                    } else {
+                        taskContext.blockers.add("Action ${decision.primitive}(${decision.target}) failed: ${universalResult.message}")
                     }
                     if (!universalResult.evidence.isNullOrBlank()) {
                         taskContext.capturedEvidence["action_${iteration}_evidence"] = universalResult.evidence
@@ -213,9 +218,18 @@ class AgentExecutor(private val context: Context?) {
                     currentTask = currentTask.copy(actionRecords = actionRecords.toList())
                     onStepUpdated(currentTask)
 
-                    // Brief delay for UI pre-render / settle, then capture FRESH observation
+                    // Brief delay for UI pre-render / settle, then capture FRESH observation using live accessibility tree
                     delay(600)
-                    lastObservation = ScreenObservationEngine.captureObservation(null, "android", "System")
+                    val service = com.ace.app.accessibility.AceAccessibilityService.getInstance()
+                    val activeRoot = service?.rootInActiveWindow
+                    val activePkg = activeRoot?.packageName?.toString() ?: "android"
+                    lastObservation = ScreenObservationEngine.waitForUiSettled(
+                        previousObservation = obs,
+                        fetchFreshRoot = { com.ace.app.accessibility.AceAccessibilityService.getInstance()?.rootInActiveWindow },
+                        currentPackage = activePkg,
+                        appName = activePkg,
+                        maxWaitMs = 800L
+                    )
                 }
 
                 is com.ace.app.brain.AgentDecision.Wait -> {

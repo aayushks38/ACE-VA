@@ -539,31 +539,23 @@ class AutonomousAgentArchitectureTest {
         assertFalse("Cleared state must not be awaiting clarification", AceConversationContext.getConversationalState().isAwaitingClarification)
     }
 
-    // 33. Gemma CLARIFY decision structure produces AgentDecision.Clarify.
+    // 33. Gemma CLARIFY decision structure is extracted by GemmaLocalBrain production code.
     @Test
     fun testGemmaClarifyDecisionProcessing() {
-        val rawOutput = """{"status":"CLARIFY","question":"Which university admissions requirement would you like me to look up?"}"""
-        val status = try {
-            val json = org.json.JSONObject(rawOutput)
-            json.optString("status", "")
-        } catch (_: Throwable) {
-            "CLARIFY"
-        }
-        val question = try {
-            val json = org.json.JSONObject(rawOutput)
-            json.optString("question", "")
-        } catch (_: Throwable) {
-            "Which university admissions requirement would you like me to look up?"
-        }
-
-        val decision: AgentDecision = if (status == "CLARIFY") {
-            AgentDecision.Clarify(question)
-        } else {
-            AgentDecision.Blocked("Unrecognized status")
-        }
-
-        assertTrue("CLARIFY status must produce AgentDecision.Clarify", decision is AgentDecision.Clarify)
-        assertEquals("Which university admissions requirement would you like me to look up?", (decision as AgentDecision.Clarify).question)
+        val brain = com.ace.app.brain.GemmaLocalBrain()
+        val rawOutput = """{
+            "objectiveType": "GENERAL",
+            "requestedOutcome": "Clarification required",
+            "targetEntities": [],
+            "desiredState": "",
+            "desiredInformation": "",
+            "clarificationRequired": true,
+            "clarificationQuestion": "Which university admissions requirement would you like me to look up?"
+        }"""
+        val parsed = brain.extractJsonObject(rawOutput)
+        assertNotNull("GemmaLocalBrain production parser must extract CLARIFY JSON", parsed)
+        assertTrue("clarificationRequired must be true", parsed?.clarificationRequired == true)
+        assertEquals("Which university admissions requirement would you like me to look up?", parsed?.clarificationQuestion)
     }
 
     // 34. Fresh observation is formatted with app, state, interactive elements and bounds on every iteration.
