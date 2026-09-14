@@ -40,6 +40,9 @@ class VoiceManager(
     var partialResultsCount: Int = 0
     var finalResultsCount: Int = 0
 
+    private var pendingRecognizerRunnable: Runnable? = null
+    private var pendingRetryRunnable: Runnable? = null
+
     fun getActiveGenerationId(): Long = voiceSessionGeneration.get()
     fun getCurrentTranscript(): String = currentTranscript
     fun getCurrentPartial(): String = currentPartial
@@ -78,8 +81,11 @@ class VoiceManager(
 
     fun startListening(sessionId: String = "voice_session_${System.currentTimeMillis()}", retryCount: Int = 0) {
         mainHandler.post {
-            // Remove any pending delayed runnables or callbacks from previous sessions
-            mainHandler.removeCallbacksAndMessages(null)
+            // Cancel explicit pending runnables from previous recognition attempts
+            pendingRecognizerRunnable?.let { mainHandler.removeCallbacks(it) }
+            pendingRecognizerRunnable = null
+            pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+            pendingRetryRunnable = null
 
             // Cleanly tear down any ongoing recognition session or TTS playback
             rimeOutput?.stop()
@@ -122,8 +128,8 @@ class VoiceManager(
             val isAvail = SpeechRecognizer.isRecognitionAvailable(context)
 
             if (!hasPerm || !isAvail) {
-                if (!hasPerm) safeOnError("Microphone permission required.")
-                else safeOnError("Speech recognition unavailable on device.")
+                if (!hasPerm) safeOnError("Microphone permission required.", sessionGen)
+                else safeOnError("Speech recognition unavailable on device.", sessionGen)
                 updateState(VoiceState.IDLE)
                 return@post
             }
@@ -140,6 +146,7 @@ class VoiceManager(
                         val activeGen = voiceSessionGeneration.get()
                         if (capturedGen != activeGen) {
                             Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=$activeGen stale_generation=$capturedGen active_generation=$activeGen")
+                            Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$capturedGen active=$activeGen")
                             return false
                         }
                         return true
@@ -156,7 +163,11 @@ class VoiceManager(
                         Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId speech_started=true generation=$capturedGen")
                         Log.i("ACE_MIC", "ACE_MIC: mic_active=true mic_source=DEVICE_HARDWARE_MIC session=$activeSessionId synthetic_event=false generation=$capturedGen")
                         updateState(VoiceState.LISTENING)
-                        mainHandler.post { onSpeechStart?.invoke() }
+                        mainHandler.post {
+                            if (isCurrentGen()) {
+                                onSpeechStart?.invoke()
+                            }
+                        }
                     }
 
                     override fun onRmsChanged(rmsdB: Float) {}
@@ -169,7 +180,11 @@ class VoiceManager(
                         Log.i("ACE_MIC", "ACE_MIC: mic_active=false session=$activeSessionId synthetic_event=false generation=$capturedGen")
                         Log.i("ACE_SESSION", "ACE_SESSION: state_transition=LISTENING→THINKING")
                         updateState(VoiceState.THINKING)
-                        mainHandler.post { onSpeechEnd?.invoke() }
+                        mainHandler.post {
+                            if (isCurrentGen()) {
+                                onSpeechEnd?.invoke()
+                            }
+                        }
                     }
 
                     override fun onError(error: Int) {
@@ -195,11 +210,18 @@ class VoiceManager(
                             Log.i("ACE_SPEECH", "ACE_SPEECH: transient error=$error — silently retrying after 500ms (attempt ${retryCount + 1}/2)")
                             try { recognizer?.destroy() } catch (_: Exception) {}
                             recognizer = null
-                            mainHandler.postDelayed({
-                                startListening(activeSessionId, retryCount + 1)
-                            }, 500L)
+                            val retryRunnable = Runnable {
+                                if (capturedGen == voiceSessionGeneration.get()) {
+                                    startListening(activeSessionId, retryCount + 1)
+                                } else {
+                                    Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
+                                    Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
+                                }
+                            }
+                            pendingRetryRunnable = retryRunnable
+                            mainHandler.postDelayed(retryRunnable, 500L)
                         } else {
-                            safeOnError(message)
+                            safeOnError(message, capturedGen)
                         }
                     }
 
@@ -233,11 +255,14 @@ class VoiceManager(
                             mainHandler.post {
                                 if (isCurrentGen()) {
                                     onSpeechRecognized(spokenText)
+                                } else {
+                                    Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
+                                    Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
                                 }
                             }
                         } else {
                             Log.w("ACE_SPEECH", "ACE_SPEECH: session=$currentSession rejected_invalid_command=\"$spokenText\" execute=false generation=$capturedGen")
-                            safeOnError("Invalid or empty speech input")
+                            safeOnError("Invalid or empty speech input", capturedGen)
                         }
                     }
 
@@ -256,10 +281,11 @@ class VoiceManager(
                 }
 
                 // Allow 100ms for the system to release the previous audio session before starting new one
-                mainHandler.postDelayed({
+                val delayedStartRunnable = Runnable {
                     if (capturedGen != voiceSessionGeneration.get()) {
                         Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
-                        return@postDelayed
+                        Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
+                        return@Runnable
                     }
                     try {
                         val speechRec = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
@@ -289,13 +315,15 @@ class VoiceManager(
                         recognizer = null
                         updateState(VoiceState.IDLE)
                     }
-                }, 100L)
+                }
+                pendingRecognizerRunnable = delayedStartRunnable
+                mainHandler.postDelayed(delayedStartRunnable, 100L)
             } catch (e: Exception) {
                 Log.e("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId error=\"${e.message}\"", e)
                 try { recognizer?.destroy() } catch (_: Exception) {}
                 recognizer = null
                 updateState(VoiceState.IDLE)
-                safeOnError("Could not start speech recognizer: ${e.message}")
+                safeOnError("Could not start speech recognizer: ${e.message}", sessionGen)
             }
         }
     }
@@ -316,6 +344,10 @@ class VoiceManager(
 
     fun stopListening() {
         mainHandler.post {
+            pendingRecognizerRunnable?.let { mainHandler.removeCallbacks(it) }
+            pendingRecognizerRunnable = null
+            pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+            pendingRetryRunnable = null
             try {
                 recognizer?.stopListening()
                 recognizer?.destroy()
@@ -334,12 +366,23 @@ class VoiceManager(
         }
     }
 
-    private fun safeOnError(msg: String) {
-        mainHandler.post { onError(msg) }
+    private fun safeOnError(msg: String, capturedGen: Long = 0L) {
+        mainHandler.post {
+            if (capturedGen == 0L || capturedGen == voiceSessionGeneration.get()) {
+                onError(msg)
+            } else {
+                Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
+                Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
+            }
+        }
     }
 
     fun release() {
         mainHandler.post {
+            pendingRecognizerRunnable?.let { mainHandler.removeCallbacks(it) }
+            pendingRecognizerRunnable = null
+            pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+            pendingRetryRunnable = null
             try {
                 rimeOutput?.stop()
                 recognizer?.stopListening()

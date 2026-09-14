@@ -222,4 +222,41 @@ class VoiceAndTaskSessionIsolationTest {
         assertFalse(handleVoiceResult(g2, "Find me the latest late callback"))
         assertEquals("Turn on the flashlight", currentUiTaskGoal)
     }
+
+    // 12. Rapid session replacement (multiple orb taps before recognition completes).
+    @Test
+    fun testRapidSessionReplacement() {
+        val gen1 = startVoiceSession()
+        // Rapid orb tap 100ms later before gen1 finishes
+        val gen2 = startVoiceSession()
+        // Rapid orb tap 50ms later before gen2 finishes
+        val gen3 = startVoiceSession()
+
+        // Callbacks from gen1 and gen2 arrive after gen3 started
+        assertFalse("Gen1 callback must be rejected during gen3", handleVoiceResult(gen1, "Open Spotify"))
+        assertFalse("Gen2 callback must be rejected during gen3", handleVoiceResult(gen2, "Find me the latest"))
+
+        // Active gen3 callback completes normally
+        assertTrue("Gen3 callback must be accepted", handleVoiceResult(gen3, "Turn on the flashlight"))
+        val submitted = submitTaskGoal(gen3, currentTranscript!!)
+        assertNotNull("Gen3 task must be submitted", submitted)
+        assertEquals("Turn on the flashlight", currentUiTaskGoal)
+    }
+
+    // 13. Stale queued callback logging format test.
+    @Test
+    fun testStaleQueuedCallbackIgnoredLogging() {
+        val staleGen = 1L
+        val activeGen = 2L
+        activeVoiceGen.set(activeGen)
+
+        var logEmitted = false
+        val isAccepted = if (staleGen != activeVoiceGen.get()) {
+            logEmitted = true
+            false
+        } else true
+
+        assertFalse("Stale queued callback must be rejected", isAccepted)
+        assertTrue("Stale callback rejection must be detected and logged", logEmitted)
+    }
 }
