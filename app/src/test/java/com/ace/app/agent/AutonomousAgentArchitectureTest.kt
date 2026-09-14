@@ -490,33 +490,56 @@ class AutonomousAgentArchitectureTest {
         val initialGoal = "Find me the latest"
         val question = "Could you specify what you'd like me to find?"
 
-        AceConversationContext.setPendingClarification(initialGoal, question)
+        AceConversationContext.setPendingClarification(initialGoal, question, 101L)
 
         val userClarificationAnswer = "Admissions requirements for Harvard University on their website"
-        val consumed = AceConversationContext.consumePendingClarification()
+        val combinedText = AceConversationContext.consumePendingClarification(userClarificationAnswer)
 
-        assertNotNull("Pending clarification must be consumable", consumed)
-        assertEquals(initialGoal, consumed?.first)
-        assertEquals(question, consumed?.second)
-
-        val combinedContext = "Context: Previous goal was '${consumed?.first}'. Clarification requested: '${consumed?.second}'. User provided: '$userClarificationAnswer'"
-        assertTrue("Combined context must contain original goal", combinedContext.contains(initialGoal))
-        assertTrue("Combined context must contain clarification question", combinedContext.contains(question))
-        assertTrue("Combined context must contain user answer", combinedContext.contains(userClarificationAnswer))
+        assertNotNull("Pending clarification combined text must be generated", combinedText)
+        assertTrue("Combined context must contain original goal", combinedText!!.contains(initialGoal))
+        assertTrue("Combined context must contain clarification question", combinedText.contains(question))
+        assertTrue("Combined context must contain user answer", combinedText.contains(userClarificationAnswer))
 
         // Subsequent call returns null (consumed)
-        assertNull("Subsequent consume must return null to prevent leaking into future turns", AceConversationContext.consumePendingClarification())
+        assertNull("Subsequent consume must return null to prevent leaking into future turns", AceConversationContext.consumePendingClarification(userClarificationAnswer))
     }
 
-    // 31. Session clearing resets pending clarification safely.
+    // 31. Formal ConversationalSessionState model tracks session generations and awaiting clarification state.
+    @Test
+    fun testConversationalStateModelSessionTracking() {
+        AceConversationContext.clearSession()
+        val session1 = AceConversationContext.startNewSession(201L)
+        assertEquals(201L, session1.sessionGenerationId)
+        assertFalse(session1.isAwaitingClarification)
+
+        AceConversationContext.setPendingClarification("Goal 1", "Clarification 1", 201L)
+        val state1 = AceConversationContext.getConversationalState()
+        assertTrue(state1.isAwaitingClarification)
+        assertEquals("Goal 1", state1.pendingGoal)
+        assertEquals("Clarification 1", state1.clarificationQuestion)
+
+        // Starting session 2 while awaiting clarification preserves pending clarification state
+        val session2 = AceConversationContext.startNewSession(202L)
+        assertEquals(202L, session2.sessionGenerationId)
+        assertTrue("Session 2 must inherit awaiting clarification state until answered", session2.isAwaitingClarification)
+        assertEquals("Goal 1", session2.pendingGoal)
+
+        // Answering clarification consumes state
+        val consumed = AceConversationContext.consumePendingClarification("Answer 1")
+        assertNotNull(consumed)
+        assertFalse("State must no longer be awaiting clarification after answer", AceConversationContext.getConversationalState().isAwaitingClarification)
+    }
+
+    // 32. Session clearing resets pending clarification safely.
     @Test
     fun testSessionCleardownResetsPendingClarification() {
         AceConversationContext.setPendingClarification("Unfinished goal", "What item?")
         AceConversationContext.clearSession()
-        assertNull("Clearing session must wipe pending clarification", AceConversationContext.consumePendingClarification())
+        assertNull("Clearing session must wipe pending clarification", AceConversationContext.consumePendingClarification("Anything"))
+        assertFalse("Cleared state must not be awaiting clarification", AceConversationContext.getConversationalState().isAwaitingClarification)
     }
 
-    // 32. Gemma CLARIFY decision structure produces AgentDecision.Clarify.
+    // 33. Gemma CLARIFY decision structure produces AgentDecision.Clarify.
     @Test
     fun testGemmaClarifyDecisionProcessing() {
         val rawOutput = """{"status":"CLARIFY","question":"Which university admissions requirement would you like me to look up?"}"""

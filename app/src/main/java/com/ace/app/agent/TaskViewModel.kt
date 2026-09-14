@@ -234,6 +234,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         pendingGoal.set(null)
         val gen = currentGeneration.get()
         val vGen = voiceManager?.getActiveGenerationId() ?: 0L
+        AceConversationContext.startNewSession(vGen)
         android.util.Log.i("ACE_VOICE", "VOICE_TRANSCRIPT_CLEARED id=$vGen")
         android.util.Log.i("ACE_TASK", "TASK_UI_STATE generation=$gen")
         _uiState.value = _uiState.value.copy(
@@ -303,11 +304,10 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val pendingClarification = AceConversationContext.consumePendingClarification()
-        val effectiveGoal = if (pendingClarification != null) {
-            val (prevGoal, q) = pendingClarification
-            android.util.Log.i("ACE_CONVERSATION", "ACE_CONVERSATION: incorporating clarification context prevGoal=\"$prevGoal\" question=\"$q\" answer=\"$cleanGoal\"")
-            "Context: Previous goal was '$prevGoal'. Clarification requested: '$q'. User provided: '$cleanGoal'"
+        val pendingClarificationText = AceConversationContext.consumePendingClarification(cleanGoal)
+        val effectiveGoal = if (pendingClarificationText != null) {
+            android.util.Log.i("ACE_CONVERSATION", "ACE_CONVERSATION: incorporating clarification context text=\"$pendingClarificationText\"")
+            pendingClarificationText
         } else {
             cleanGoal
         }
@@ -393,10 +393,10 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                         },
                         onClarificationNeeded = { question ->
                             if (AceTaskSessionManager.isCurrentGeneration(generationId)) {
-                                AceConversationContext.setPendingClarification(cleanGoal, question)
+                                AceConversationContext.setPendingClarification(effectiveGoal, question, generationId)
                                 _uiState.value = _uiState.value.copy(
                                     activeTask = null,
-                                    lastHeard = cleanGoal,
+                                    lastHeard = effectiveGoal,
                                     announcement = question,
                                     currentActionLabel = ""
                                 )
