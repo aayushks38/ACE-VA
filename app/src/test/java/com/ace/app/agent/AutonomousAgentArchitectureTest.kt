@@ -565,4 +565,79 @@ class AutonomousAgentArchitectureTest {
         assertTrue("CLARIFY status must produce AgentDecision.Clarify", decision is AgentDecision.Clarify)
         assertEquals("Which university admissions requirement would you like me to look up?", (decision as AgentDecision.Clarify).question)
     }
+
+    // 34. Fresh observation is formatted with app, state, interactive elements and bounds on every iteration.
+    @Test
+    fun testFreshObservationInjectedIntoGemmaPromptOnEveryIteration() {
+        val obs = ScreenObservation(
+            packageName = "org.mozilla.firefox",
+            appName = "Firefox",
+            visibleText = listOf("Harvard Admissions", "Application Portal", "Requirements"),
+            clickableElements = listOf(
+                ScreenElement(id = "search_btn", text = "Search", contentDescription = "Search button", isClickable = true, isEditable = false, isScrollable = false, isSelected = false, boundsInScreen = "[100,200,300,400]")
+            ),
+            editableElements = listOf(
+                ScreenElement(id = "url_bar", text = "https://harvard.edu", contentDescription = "Address bar", isClickable = true, isEditable = true, isScrollable = false, isSelected = false, boundsInScreen = "[0,50,1080,150]")
+            ),
+            scrollableElements = listOf(
+                ScreenElement(id = "scroll_view", text = "Content", contentDescription = "Main scroll", isClickable = false, isEditable = false, isScrollable = true, isSelected = false)
+            ),
+            screenState = "INTERACTIVE_SCREEN",
+            isPerceptionAvailable = true
+        )
+        val formattedPrompt = ScreenObservationEngine.formatCompactUiRepresentation("Find admissions", obs)
+        assertTrue("Observation must contain app name", formattedPrompt.contains("Firefox"))
+        assertTrue("Observation must contain interactive element text", formattedPrompt.contains("Search"))
+        assertTrue("Observation must contain editable element bounds", formattedPrompt.contains("[0,50,1080,150]"))
+        assertTrue("Observation must contain visible text nodes", formattedPrompt.contains("Harvard Admissions"))
+    }
+
+    // 35. Information-seeking goal cannot complete merely because a browser was launched or opened.
+    @Test
+    fun testInformationSeekingGoalCannotCompleteWithoutPostconditionEvidence() {
+        val postcondition = ExpectedPostcondition(
+            summary = "Find admissions requirements for Harvard",
+            desiredInformation = "Official admissions requirements text"
+        )
+        val context = AgentTaskContext(
+            userGoal = "Find admissions requirements for Harvard",
+            expectedPostcondition = postcondition,
+            actionHistory = mutableListOf("Iteration 1: open_url(https://harvard.edu) -> SUCCESS")
+        )
+        val browserHomeObs = ScreenObservation(
+            packageName = "com.android.chrome",
+            appName = "Chrome",
+            visibleText = listOf("Google", "Search or type URL"),
+            screenState = "BrowserHome"
+        )
+        val outcome = IndependentGoalVerifier.verifyGoal(context, browserHomeObs, null)
+        assertFalse("Opening browser alone must not satisfy information retrieval postcondition", outcome.isVerified)
+        assertEquals(TaskStatus.NOT_VERIFIED, outcome.status)
+    }
+
+    // 36. Action failure or unexpected observation triggers model-driven replan context.
+    @Test
+    fun testActionFailureTriggersModelDrivenReplanContext() {
+        val context = AgentTaskContext(
+            userGoal = "Find admissions",
+            expectedPostcondition = ExpectedPostcondition(summary = "Find admissions")
+        )
+        context.actionHistory.add("Iteration 1: CLICK(Submit) -> FAILED")
+        context.blockers.add("Could not click UI element 'Submit'")
+
+        val memoryStr = context.formatCompactTaskMemory()
+        assertTrue("Task memory must record action failure for model replanning", memoryStr.contains("FAILED"))
+        assertTrue("Task memory must record failure reason", memoryStr.contains("Could not click"))
+    }
+
+    // 37. Natural-language tasks route strictly to DeepBrain for autonomous execution.
+    @Test
+    fun testNaturalLanguageTasksRouteStrictlyToDeepBrain() {
+        val router = AceCommandRouter()
+        val route = router.route("Go to the university website and find admissions deadlines", brainAvailable = true)
+        assertTrue("Complex natural language task must route to DeepBrain", route is CommandRoute.DeepBrain)
+        val deepRoute = route as CommandRoute.DeepBrain
+        assertEquals(RouteType.DEEP_BRAIN, deepRoute.result.route)
+        assertTrue("Brain must be required for autonomous execution", deepRoute.result.brainRequired)
+    }
 }
