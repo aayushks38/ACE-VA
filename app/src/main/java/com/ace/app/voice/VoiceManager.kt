@@ -264,7 +264,7 @@ class VoiceManager(
                         } else {
                             SpeechRecognizer.createSpeechRecognizer(context)
                         }
-                        Log.i("ACE_VOICE", "VOICE_RECOGNIZER_CREATED id=$capturedGen")
+                        Log.i("ACE_VOICE", "VOICE_RECOGNIZER_CREATED generation=$capturedGen id=$capturedGen")
 
                         recognizer = speechRec.apply {
                             setRecognitionListener(listener)
