@@ -147,6 +147,13 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         val cleanText = spokenText.trim()
         if (cleanText.isBlank()) return
 
+        val activeVoiceGen = voiceManager?.getActiveGenerationId() ?: 0L
+        if (sourceVoiceGenId != 0L && activeVoiceGen != 0L && sourceVoiceGenId != activeVoiceGen) {
+            android.util.Log.w("ACE_TASK", "TASK_SUBMIT_REJECTED stale_voice_gen=$sourceVoiceGenId active_voice_gen=$activeVoiceGen text=\"$cleanText\"")
+            android.util.Log.w("ACE_TASK", "ACE_TASK: STALE_REJECTED voiceGeneration=$sourceVoiceGenId activeVoiceGeneration=$activeVoiceGen")
+            return
+        }
+
         android.util.Log.i("ACE_TASK", "ACE_TASK: spoken input received=$cleanText sourceVoiceGenId=$sourceVoiceGenId")
 
         val state = _uiState.value
@@ -241,6 +248,12 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         val cleanGoal = goal.trim()
         if (cleanGoal.isBlank()) return
 
+        val activeVoiceGen = voiceManager?.getActiveGenerationId() ?: 0L
+        if (sourceVoiceGenId != 0L && activeVoiceGen != 0L && sourceVoiceGenId != activeVoiceGen) {
+            android.util.Log.w("ACE_TASK", "TASK_SUBMIT_REJECTED stale_voice_gen=$sourceVoiceGenId active_voice_gen=$activeVoiceGen goal=\"$cleanGoal\"")
+            return
+        }
+
         pendingGoal.set(null)
         com.ace.app.utils.AceLatencyTracker.startTask()
         com.ace.app.utils.AceLatencyTracker.mark("speech_result")
@@ -249,7 +262,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         
         val generationId = AceTaskSessionManager.startNewSession(cleanGoal, brain, voiceManager, executionJob)
         currentGeneration.set(generationId)
-        android.util.Log.i("ACE_TASK", "TASK_SUBMIT generation=$generationId text=\"$cleanGoal\" sourceVoiceGeneration=$sourceVoiceGenId")
+        android.util.Log.i("ACE_TASK", "TASK_SUBMIT voiceGeneration=$sourceVoiceGenId taskGeneration=$generationId text=\"$cleanGoal\"")
         android.util.Log.i("ACE_TASK", "TASK_SESSION_START generation=$generationId sourceVoiceGeneration=$sourceVoiceGenId goal_length=${cleanGoal.length}")
         android.util.Log.i("ACE_TASK", "TASK_UI_STATE generation=$generationId")
 

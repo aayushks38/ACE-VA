@@ -63,7 +63,7 @@ fun HomeScreen(
     val voiceManager = remember {
         VoiceManager(
             context = context.applicationContext,
-            onSpeechRecognized = { text -> viewModel.handleSpokenInput(text, viewModel.voiceManager?.getActiveGenerationId() ?: 0L) },
+            onSpeechRecognized = { text, voiceGenId -> viewModel.handleSpokenInput(text, voiceGenId) },
             onStateChanged = { voiceState -> viewModel.setVoiceState(voiceState) },
             onError = { errMsg ->
                 android.os.Handler(android.os.Looper.getMainLooper()).post {

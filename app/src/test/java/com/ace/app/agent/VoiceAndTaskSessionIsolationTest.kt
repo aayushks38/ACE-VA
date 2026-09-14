@@ -259,4 +259,33 @@ class VoiceAndTaskSessionIsolationTest {
         assertFalse("Stale queued callback must be rejected", isAccepted)
         assertTrue("Stale callback rejection must be detected and logged", logEmitted)
     }
+
+    // 14. Partial result interrupted by new session.
+    @Test
+    fun testPartialResultInterruptedByNewSession() {
+        val gen1 = startVoiceSession()
+        var gen1Partial: String? = "Open Spo"
+        assertEquals("Open Spo", gen1Partial)
+
+        // Session 2 starts before Gen 1 produces onResults
+        val gen2 = startVoiceSession()
+        assertNull("Session 2 start must clear transcript", currentTranscript)
+
+        // Delayed Gen 1 final callback arrives during Session 2
+        val gen1LateAccepted = handleVoiceResult(gen1, "Open Spotify")
+        assertFalse("Gen 1 late final result must be rejected during Session 2", gen1LateAccepted)
+        assertNull("Gen 1 late result must not contaminate Session 2 transcript", currentTranscript)
+
+        val gen1TaskSubmission = submitTaskGoal(gen1, "Open Spotify")
+        assertNull("Gen 1 task submission must be rejected during Session 2", gen1TaskSubmission)
+
+        // Session 2 final callback arrives
+        val gen2Accepted = handleVoiceResult(gen2, "Find me the latest")
+        assertTrue("Gen 2 final result must be accepted", gen2Accepted)
+        assertEquals("Find me the latest", currentTranscript)
+
+        val gen2TaskSubmission = submitTaskGoal(gen2, "Find me the latest")
+        assertNotNull("Gen 2 task submission must succeed", gen2TaskSubmission)
+        assertEquals("Find me the latest", currentUiTaskGoal)
+    }
 }

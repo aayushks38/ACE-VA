@@ -20,7 +20,7 @@ enum class VoiceState {
 
 class VoiceManager(
     private val context: Context,
-    private val onSpeechRecognized: (String) -> Unit,
+    private val onSpeechRecognized: (text: String, voiceGenId: Long) -> Unit,
     private val onStateChanged: (VoiceState) -> Unit,
     private val onError: (String) -> Unit,
     private val onSpeechStart: (() -> Unit)? = null,
@@ -40,8 +40,51 @@ class VoiceManager(
     var partialResultsCount: Int = 0
     var finalResultsCount: Int = 0
 
-    private var pendingRecognizerRunnable: Runnable? = null
-    private var pendingRetryRunnable: Runnable? = null
+    private val pendingRunnablesMap = java.util.concurrent.ConcurrentHashMap<Long, MutableList<Runnable>>()
+
+    private fun scheduleSessionRunnable(generation: Long, delayMs: Long = 0L, action: () -> Unit): Runnable {
+        var runnableRef: Runnable? = null
+        val runnable = Runnable {
+            runnableRef?.let { pendingRunnablesMap[generation]?.remove(it) }
+            if (generation == voiceSessionGeneration.get()) {
+                action()
+            } else {
+                Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$generation active=${voiceSessionGeneration.get()}")
+                Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$generation active=${voiceSessionGeneration.get()}")
+            }
+        }
+        runnableRef = runnable
+        pendingRunnablesMap.getOrPut(generation) { java.util.Collections.synchronizedList(mutableListOf()) }.add(runnable)
+        if (delayMs > 0L) {
+            mainHandler.postDelayed(runnable, delayMs)
+        } else {
+            mainHandler.post(runnable)
+        }
+        return runnable
+    }
+
+    private fun cancelRunnablesForGeneration(generation: Long) {
+        pendingRunnablesMap.remove(generation)?.let { list ->
+            synchronized(list) {
+                for (r in list) {
+                    mainHandler.removeCallbacks(r)
+                }
+                list.clear()
+            }
+        }
+    }
+
+    private fun cancelAllPendingRunnables() {
+        for ((_, list) in pendingRunnablesMap) {
+            synchronized(list) {
+                for (r in list) {
+                    mainHandler.removeCallbacks(r)
+                }
+                list.clear()
+            }
+        }
+        pendingRunnablesMap.clear()
+    }
 
     fun getActiveGenerationId(): Long = voiceSessionGeneration.get()
     fun getCurrentTranscript(): String = currentTranscript
@@ -81,11 +124,18 @@ class VoiceManager(
 
     fun startListening(sessionId: String = "voice_session_${System.currentTimeMillis()}", retryCount: Int = 0) {
         mainHandler.post {
+            val sessionGen = if (retryCount == 0) {
+                voiceSessionGeneration.incrementAndGet()
+            } else {
+                voiceSessionGeneration.get()
+            }
+
             // Cancel explicit pending runnables from previous recognition attempts
-            pendingRecognizerRunnable?.let { mainHandler.removeCallbacks(it) }
-            pendingRecognizerRunnable = null
-            pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
-            pendingRetryRunnable = null
+            if (retryCount == 0 && sessionGen > 1L) {
+                for (g in 1L until sessionGen) {
+                    cancelRunnablesForGeneration(g)
+                }
+            }
 
             // Cleanly tear down any ongoing recognition session or TTS playback
             rimeOutput?.stop()
@@ -94,12 +144,6 @@ class VoiceManager(
                 recognizer?.destroy()
             } catch (_: Exception) {}
             recognizer = null
-
-            val sessionGen = if (retryCount == 0) {
-                voiceSessionGeneration.incrementAndGet()
-            } else {
-                voiceSessionGeneration.get()
-            }
 
             activeSessionId = sessionId
             partialResultsCount = 0
@@ -140,13 +184,15 @@ class VoiceManager(
                 recognizer = null
 
                 val capturedGen = sessionGen
+                var assignedRecognizer: SpeechRecognizer? = null
 
                 val listener = object : RecognitionListener {
                     private fun isCurrentGen(): Boolean {
                         val activeGen = voiceSessionGeneration.get()
-                        if (capturedGen != activeGen) {
-                            Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=$activeGen stale_generation=$capturedGen active_generation=$activeGen")
+                        if (capturedGen != activeGen || (recognizer != null && assignedRecognizer != null && assignedRecognizer != recognizer)) {
+                            Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=$activeGen recognizer_match=${assignedRecognizer == recognizer}")
                             Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$capturedGen active=$activeGen")
+                            try { assignedRecognizer?.destroy() } catch (_: Exception) {}
                             return false
                         }
                         return true
@@ -163,7 +209,7 @@ class VoiceManager(
                         Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId speech_started=true generation=$capturedGen")
                         Log.i("ACE_MIC", "ACE_MIC: mic_active=true mic_source=DEVICE_HARDWARE_MIC session=$activeSessionId synthetic_event=false generation=$capturedGen")
                         updateState(VoiceState.LISTENING)
-                        mainHandler.post {
+                        scheduleSessionRunnable(capturedGen) {
                             if (isCurrentGen()) {
                                 onSpeechStart?.invoke()
                             }
@@ -180,7 +226,7 @@ class VoiceManager(
                         Log.i("ACE_MIC", "ACE_MIC: mic_active=false session=$activeSessionId synthetic_event=false generation=$capturedGen")
                         Log.i("ACE_SESSION", "ACE_SESSION: state_transition=LISTENING→THINKING")
                         updateState(VoiceState.THINKING)
-                        mainHandler.post {
+                        scheduleSessionRunnable(capturedGen) {
                             if (isCurrentGen()) {
                                 onSpeechEnd?.invoke()
                             }
@@ -210,16 +256,11 @@ class VoiceManager(
                             Log.i("ACE_SPEECH", "ACE_SPEECH: transient error=$error — silently retrying after 500ms (attempt ${retryCount + 1}/2)")
                             try { recognizer?.destroy() } catch (_: Exception) {}
                             recognizer = null
-                            val retryRunnable = Runnable {
+                            scheduleSessionRunnable(capturedGen, 500L) {
                                 if (capturedGen == voiceSessionGeneration.get()) {
                                     startListening(activeSessionId, retryCount + 1)
-                                } else {
-                                    Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
-                                    Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
                                 }
                             }
-                            pendingRetryRunnable = retryRunnable
-                            mainHandler.postDelayed(retryRunnable, 500L)
                         } else {
                             safeOnError(message, capturedGen)
                         }
@@ -252,12 +293,9 @@ class VoiceManager(
                             Log.i("ACE_VOICE", "VOICE_SUBMIT id=$capturedGen length=${spokenText.length}")
                             Log.i("ACE_SPEECH", "ACE_SPEECH: session=$currentSession final_result=\"$spokenText\" execute=true synthetic_event=false generation=$capturedGen")
                             Log.i("ACE_COMMAND", "ACE_COMMAND: session=$currentSession routing_started=true goal=\"$spokenText\" generation=$capturedGen")
-                            mainHandler.post {
+                            scheduleSessionRunnable(capturedGen) {
                                 if (isCurrentGen()) {
-                                    onSpeechRecognized(spokenText)
-                                } else {
-                                    Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
-                                    Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
+                                    onSpeechRecognized(spokenText, capturedGen)
                                 }
                             }
                         } else {
@@ -281,11 +319,11 @@ class VoiceManager(
                 }
 
                 // Allow 100ms for the system to release the previous audio session before starting new one
-                val delayedStartRunnable = Runnable {
+                scheduleSessionRunnable(capturedGen, 100L) {
                     if (capturedGen != voiceSessionGeneration.get()) {
                         Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
                         Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
-                        return@Runnable
+                        return@scheduleSessionRunnable
                     }
                     try {
                         val speechRec = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
@@ -295,6 +333,7 @@ class VoiceManager(
                         }
                         Log.i("ACE_VOICE", "VOICE_RECOGNIZER_CREATED generation=$capturedGen id=$capturedGen")
 
+                        assignedRecognizer = speechRec
                         recognizer = speechRec.apply {
                             setRecognitionListener(listener)
                         }
@@ -316,8 +355,6 @@ class VoiceManager(
                         updateState(VoiceState.IDLE)
                     }
                 }
-                pendingRecognizerRunnable = delayedStartRunnable
-                mainHandler.postDelayed(delayedStartRunnable, 100L)
             } catch (e: Exception) {
                 Log.e("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId error=\"${e.message}\"", e)
                 try { recognizer?.destroy() } catch (_: Exception) {}
@@ -344,10 +381,8 @@ class VoiceManager(
 
     fun stopListening() {
         mainHandler.post {
-            pendingRecognizerRunnable?.let { mainHandler.removeCallbacks(it) }
-            pendingRecognizerRunnable = null
-            pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
-            pendingRetryRunnable = null
+            val currentGen = voiceSessionGeneration.get()
+            cancelRunnablesForGeneration(currentGen)
             try {
                 recognizer?.stopListening()
                 recognizer?.destroy()
@@ -366,23 +401,17 @@ class VoiceManager(
         }
     }
 
-    private fun safeOnError(msg: String, capturedGen: Long = 0L) {
-        mainHandler.post {
-            if (capturedGen == 0L || capturedGen == voiceSessionGeneration.get()) {
+    private fun safeOnError(msg: String, capturedGen: Long) {
+        scheduleSessionRunnable(capturedGen) {
+            if (capturedGen == voiceSessionGeneration.get()) {
                 onError(msg)
-            } else {
-                Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
-                Log.w("ACE_VOICE", "CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
             }
         }
     }
 
     fun release() {
         mainHandler.post {
-            pendingRecognizerRunnable?.let { mainHandler.removeCallbacks(it) }
-            pendingRecognizerRunnable = null
-            pendingRetryRunnable?.let { mainHandler.removeCallbacks(it) }
-            pendingRetryRunnable = null
+            cancelAllPendingRunnables()
             try {
                 rimeOutput?.stop()
                 recognizer?.stopListening()
