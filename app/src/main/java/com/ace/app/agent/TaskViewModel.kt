@@ -303,13 +303,22 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        val pendingClarification = AceConversationContext.consumePendingClarification()
+        val effectiveGoal = if (pendingClarification != null) {
+            val (prevGoal, q) = pendingClarification
+            android.util.Log.i("ACE_CONVERSATION", "ACE_CONVERSATION: incorporating clarification context prevGoal=\"$prevGoal\" question=\"$q\" answer=\"$cleanGoal\"")
+            "Context: Previous goal was '$prevGoal'. Clarification requested: '$q'. User provided: '$cleanGoal'"
+        } else {
+            cleanGoal
+        }
+
         val startMs = System.currentTimeMillis()
-        AceConversationContext.update(cleanGoal)
-        android.util.Log.i("ACE_TASK", "ACE_TASK: Received voice command = $cleanGoal")
+        AceConversationContext.update(effectiveGoal)
+        android.util.Log.i("ACE_TASK", "ACE_TASK: Received voice command = $effectiveGoal")
         android.util.Log.i("ACE_TASK", "ACE_TASK: brain.isReady()=${brain.isReady()}")
 
-        val route = commandRouter.route(cleanGoal, brainAvailable = brain.isReady())
-        val fastTask = isFastTask(cleanGoal, route)
+        val route = commandRouter.route(effectiveGoal, brainAvailable = brain.isReady())
+        val fastTask = isFastTask(effectiveGoal, route)
 
         // Task Acceptance & Voice Acknowledgement
         AceProgressSpeaker.speakTaskAccepted(cleanGoal, fastTask, generationId)
@@ -357,10 +366,10 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 viewModelScope.launch {
                     val context = getApplication<Application>().applicationContext
                     if (!brain.isReady()) {
-                        android.util.Log.i("ACE_ROUTER", "ACE_ROUTER: Gemma loading... Preserved complex user goal='$cleanGoal' in queue.")
-                        pendingGoal.set(cleanGoal)
+                        android.util.Log.i("ACE_ROUTER", "ACE_ROUTER: Gemma loading... Preserved complex user goal='$effectiveGoal' in queue.")
+                        pendingGoal.set(effectiveGoal)
                         _uiState.value = _uiState.value.copy(
-                            lastHeard = cleanGoal,
+                            lastHeard = effectiveGoal,
                             announcement = "Preparing local AI..."
                         )
                         com.ace.app.brain.GemmaBrainManager.ensureRuntimeLoadedAsync(context)
@@ -372,10 +381,10 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     android.util.Log.i("ACE_BRAIN", "ACE_BRAIN: state=READY")
                     android.util.Log.i("ACE_BRAIN", "ACE_BRAIN: deep_generation_started")
-                    android.util.Log.i("ACE_BRAIN", "ACE_BRAIN: submitting goal='$cleanGoal'")
+                    android.util.Log.i("ACE_BRAIN", "ACE_BRAIN: submitting goal='$effectiveGoal'")
 
                     val finalTask = executor.runAutonomousAgentLoop(
-                        userGoal = cleanGoal,
+                        userGoal = effectiveGoal,
                         localBrain = brain,
                         onStepUpdated = { updatedTask ->
                             if (AceTaskSessionManager.isCurrentGeneration(generationId)) {
@@ -384,6 +393,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                         },
                         onClarificationNeeded = { question ->
                             if (AceTaskSessionManager.isCurrentGeneration(generationId)) {
+                                AceConversationContext.setPendingClarification(cleanGoal, question)
                                 _uiState.value = _uiState.value.copy(
                                     activeTask = null,
                                     lastHeard = cleanGoal,

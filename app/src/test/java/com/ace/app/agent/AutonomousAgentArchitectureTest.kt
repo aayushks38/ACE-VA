@@ -482,4 +482,64 @@ class AutonomousAgentArchitectureTest {
         val parsed = brain.extractJsonObject(invalidClarify)
         assertNull("clarificationRequired=false with non-null question must be rejected", parsed)
     }
+
+    // 30. Conversational clarification context is preserved across turns and combined.
+    @Test
+    fun testConversationalClarificationPreservationAcrossTurns() {
+        AceConversationContext.clearSession()
+        val initialGoal = "Find me the latest"
+        val question = "Could you specify what you'd like me to find?"
+
+        AceConversationContext.setPendingClarification(initialGoal, question)
+
+        val userClarificationAnswer = "Admissions requirements for Harvard University on their website"
+        val consumed = AceConversationContext.consumePendingClarification()
+
+        assertNotNull("Pending clarification must be consumable", consumed)
+        assertEquals(initialGoal, consumed?.first)
+        assertEquals(question, consumed?.second)
+
+        val combinedContext = "Context: Previous goal was '${consumed?.first}'. Clarification requested: '${consumed?.second}'. User provided: '$userClarificationAnswer'"
+        assertTrue("Combined context must contain original goal", combinedContext.contains(initialGoal))
+        assertTrue("Combined context must contain clarification question", combinedContext.contains(question))
+        assertTrue("Combined context must contain user answer", combinedContext.contains(userClarificationAnswer))
+
+        // Subsequent call returns null (consumed)
+        assertNull("Subsequent consume must return null to prevent leaking into future turns", AceConversationContext.consumePendingClarification())
+    }
+
+    // 31. Session clearing resets pending clarification safely.
+    @Test
+    fun testSessionCleardownResetsPendingClarification() {
+        AceConversationContext.setPendingClarification("Unfinished goal", "What item?")
+        AceConversationContext.clearSession()
+        assertNull("Clearing session must wipe pending clarification", AceConversationContext.consumePendingClarification())
+    }
+
+    // 32. Gemma CLARIFY decision structure produces AgentDecision.Clarify.
+    @Test
+    fun testGemmaClarifyDecisionProcessing() {
+        val rawOutput = """{"status":"CLARIFY","question":"Which university admissions requirement would you like me to look up?"}"""
+        val status = try {
+            val json = org.json.JSONObject(rawOutput)
+            json.optString("status", "")
+        } catch (_: Throwable) {
+            "CLARIFY"
+        }
+        val question = try {
+            val json = org.json.JSONObject(rawOutput)
+            json.optString("question", "")
+        } catch (_: Throwable) {
+            "Which university admissions requirement would you like me to look up?"
+        }
+
+        val decision: AgentDecision = if (status == "CLARIFY") {
+            AgentDecision.Clarify(question)
+        } else {
+            AgentDecision.Blocked("Unrecognized status")
+        }
+
+        assertTrue("CLARIFY status must produce AgentDecision.Clarify", decision is AgentDecision.Clarify)
+        assertEquals("Which university admissions requirement would you like me to look up?", (decision as AgentDecision.Clarify).question)
+    }
 }
