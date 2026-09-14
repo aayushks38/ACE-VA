@@ -99,13 +99,13 @@ object IndependentGoalVerifier {
 
         var infoVerified = true
         if (desiredInformation.isNotBlank()) {
-            infoVerified = visibleTextSet.any { text -> text.contains(desiredInformation) || desiredInformation.contains(text) } ||
+            infoVerified = visibleTextSet.any { text -> text.contains(desiredInformation) } ||
                     evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(desiredInformation) }
         }
 
         var stateVerified = true
         if (desiredState.isNotBlank()) {
-            stateVerified = visibleTextSet.any { text -> text.contains(desiredState) || desiredState.contains(text) } ||
+            stateVerified = visibleTextSet.any { text -> text.contains(desiredState) } ||
                     evidence.capturedEvidenceMap.values.any { valStr -> valStr.lowercase().contains(desiredState) }
         }
 
