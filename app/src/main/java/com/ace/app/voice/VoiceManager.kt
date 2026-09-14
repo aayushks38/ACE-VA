@@ -252,12 +252,17 @@ class VoiceManager(
 
                 // Allow 100ms for the system to release the previous audio session before starting new one
                 mainHandler.postDelayed({
+                    if (capturedGen != voiceSessionGeneration.get()) {
+                        Log.w("ACE_VOICE", "VOICE_CALLBACK_IGNORED stale=$capturedGen active=${voiceSessionGeneration.get()}")
+                        return@postDelayed
+                    }
                     try {
                         val speechRec = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
                             SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
                         } else {
                             SpeechRecognizer.createSpeechRecognizer(context)
                         }
+                        Log.i("ACE_VOICE", "VOICE_RECOGNIZER_CREATED id=$capturedGen")
 
                         recognizer = speechRec.apply {
                             setRecognitionListener(listener)
