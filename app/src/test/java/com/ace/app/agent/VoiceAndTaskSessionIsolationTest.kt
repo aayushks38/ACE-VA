@@ -201,4 +201,25 @@ class VoiceAndTaskSessionIsolationTest {
         assertFalse("Stale TTS/progress callback must be rejected", staleProgressAccepted)
         assertEquals("Task 2", currentUiTaskGoal)
     }
+
+    // 11. Three consecutive requests remain completely isolated.
+    @Test
+    fun testThreeConsecutiveRequestsRemainIsolated() {
+        val g1 = startVoiceSession()
+        handleVoiceResult(g1, "Open Spotify")
+        submitTaskGoal(g1, "Open Spotify")
+
+        val g2 = startVoiceSession()
+        handleVoiceResult(g2, "Find me the latest")
+        submitTaskGoal(g2, "Find me the latest")
+
+        val g3 = startVoiceSession()
+        handleVoiceResult(g3, "Turn on the flashlight")
+        submitTaskGoal(g3, "Turn on the flashlight")
+
+        assertEquals("Turn on the flashlight", currentUiTaskGoal)
+        assertFalse(handleVoiceResult(g1, "Open Spotify late callback"))
+        assertFalse(handleVoiceResult(g2, "Find me the latest late callback"))
+        assertEquals("Turn on the flashlight", currentUiTaskGoal)
+    }
 }

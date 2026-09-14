@@ -35,10 +35,14 @@ class VoiceManager(
     private var activeSessionId: String = ""
     private val processedSessionIds = HashSet<String>()
     private val voiceSessionGeneration = java.util.concurrent.atomic.AtomicLong(0L)
+    private var currentTranscript: String = ""
+    private var currentPartial: String = ""
     var partialResultsCount: Int = 0
     var finalResultsCount: Int = 0
 
     fun getActiveGenerationId(): Long = voiceSessionGeneration.get()
+    fun getCurrentTranscript(): String = currentTranscript
+    fun getCurrentPartial(): String = currentPartial
 
     val currentProvider: VoiceProvider
         get() = rimeOutput?.currentProvider ?: VoiceProvider.DEVICE_FALLBACK
@@ -91,7 +95,11 @@ class VoiceManager(
             activeSessionId = sessionId
             partialResultsCount = 0
             finalResultsCount = 0
+            currentTranscript = ""
+            currentPartial = ""
             
+            Log.i("ACE_VOICE", "VOICE_SESSION_RESET id=$sessionGen")
+            Log.i("ACE_VOICE", "VOICE_TRANSCRIPT_CLEARED id=$sessionGen")
             Log.i("ACE_VOICE", "VOICE_SESSION_START id=$sessionGen generation=$sessionGen")
             Log.i("ACE_SESSION", "ACE_SESSION: tap_received generation=$sessionGen")
             Log.i("ACE_SESSION", "ACE_SESSION: state_transition=IDLE→LISTENING")
@@ -203,6 +211,7 @@ class VoiceManager(
 
                         val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         val spokenText = matches?.firstOrNull()?.trim().orEmpty()
+                        currentTranscript = spokenText
                         Log.i("ACE_VOICE", "VOICE_FINAL id=$capturedGen length=${spokenText.length} generation=$capturedGen transcript_length=${spokenText.length}")
                         Log.i("ACE_SESSION", "ACE_SESSION: state_transition=THINKING→IDLE_pending_route")
                         updateState(VoiceState.IDLE)
@@ -213,6 +222,7 @@ class VoiceManager(
                         if (isValid) {
                             processedSessionIds.add(currentSession)
                             com.ace.app.utils.AceLatencyTracker.startTask()
+                            Log.i("ACE_VOICE", "VOICE_SUBMIT id=$capturedGen length=${spokenText.length}")
                             Log.i("ACE_SPEECH", "ACE_SPEECH: session=$currentSession final_result=\"$spokenText\" execute=true synthetic_event=false generation=$capturedGen")
                             Log.i("ACE_COMMAND", "ACE_COMMAND: session=$currentSession routing_started=true goal=\"$spokenText\" generation=$capturedGen")
                             mainHandler.post {
@@ -231,6 +241,7 @@ class VoiceManager(
                         partialResultsCount++
                         val partial = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
                         if (!partial.isNullOrBlank()) {
+                            currentPartial = partial
                             Log.i("ACE_VOICE", "VOICE_PARTIAL id=$capturedGen length=${partial.length} generation=$capturedGen")
                             Log.i("ACE_SPEECH", "ACE_SPEECH: session=$activeSessionId partial_result=\"$partial\" execute=false generation=$capturedGen")
                         }
